@@ -1,7 +1,11 @@
+// App.tsx
+import { AuthProvider, useAuth } from './src/context/AuthContext';
+console.log('[APP] App.tsx file executing'); // <-- ADD THIS
+import { LoginScreen } from './src/screens/LoginScreen';
 import React, { useEffect, useRef, useState } from 'react';
 import { Buffer } from 'buffer';
 global.Buffer = Buffer;
-
+import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   View,
   Text,
@@ -9,9 +13,7 @@ import {
   ScrollView,
   StyleSheet,
   Modal,
-  TextInput,
   Linking,
-  SafeAreaView,
   StatusBar,
   Animated,
   Platform,
@@ -21,7 +23,16 @@ import {
 } from 'react-native';
 import { BleManager } from 'react-native-ble-plx';
 import RNBluetoothClassic from 'react-native-bluetooth-classic';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+
+// Import our new screens
+import { LiveFeedScreen } from './src/screens/LiveFeedScreen';
+import { AqiReportScreen } from './src/screens/AqiReportScreen';
+import { ProfileScreen } from './src/screens/ProfileScreen';
+import { SupportScreen } from './src/screens/SupportScreen';
+
+// Import our shared components
+import { Icon } from './src/components/Icon';
+import { Reading } from './src/utils';
 
 // Initialize BLE Manager
 const bleManager = new BleManager();
@@ -30,227 +41,33 @@ const bleManager = new BleManager();
 const SERVICE_UUID = '0000FFE0-0000-1000-8000-00805F9B34FB';
 const CHARACTERISTIC_UUID = '0000FFE1-0000-1000-8000-00805F9B34FB';
 
-// Type definitions
-interface Reading {
-  ts: Date;
-  value: number;
-}
-
-interface IconProps {
-  name: string;
-  size?: number;
-  color?: string;
-}
-
-// Helper functions
-function fmtDate(d: Date): string {
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
-}
-
-function fmtTime(d: Date): string {
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mi = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${hh}:${mi}:${ss}`;
-}
-
-function filterReadings(readings: Reading[], startDateISO?: string | null, endDateISO?: string | null): Reading[] {
-  let start: Date | null = null;
-  let end: Date | null = null;
-  if (startDateISO && startDateISO.trim()) start = new Date(startDateISO + 'T00:00:00');
-  if (endDateISO && endDateISO.trim()) end = new Date(endDateISO + 'T23:59:59');
-
-  if (!start && !end) {
-    const now = new Date();
-    start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
-  }
-
-  return readings.filter((r: Reading) => {
-    const afterStart = start ? r.ts >= start : true;
-    const beforeEnd = end ? r.ts <= end : true;
-    return afterStart && beforeEnd;
-  });
-}
-
-// Simple Icon Component
-const Icon: React.FC<IconProps> = ({ name, size = 24, color = '#fff' }) => {
-  const icons: Record<string, string> = {
-    menu: '☰',
-    bluetooth: '⚡',
-    activity: '📊',
-    wind: '💨',
-    user: '👤',
-    info: 'ℹ️',
-    shield: '🛡️',
-    bell: '🔔',
-    logout: '🚪',
-    x: '✕',
-    edit: '✎',
-    radio: '📡',
-    alert: '⚠️',
-    lock: '🔒',
-    mail: '✉️',
-  };
-
-  return (
-    <Text style={{ fontSize: size * 0.7, color }}>{icons[name] || '•'}</Text>
-  );
-};
-
-// AUTH CONTEXT - Minimal implementation
-const AUTH_KEY = '@shudhvayu_auth';
-
-const checkAuth = async () => {
-  try {
-    const user = await AsyncStorage.getItem(AUTH_KEY);
-    return user ? JSON.parse(user) : null;
-  } catch (error) {
-    return null;
-  }
-};
-
-const saveAuth = async (user: any) => {
-  try {
-    await AsyncStorage.setItem(AUTH_KEY, JSON.stringify(user));
-  } catch (error) {
-    console.log('Save auth error:', error);
-  }
-};
-
-const clearAuth = async () => {
-  try {
-    await AsyncStorage.removeItem(AUTH_KEY);
-  } catch (error) {
-    console.log('Clear auth error:', error);
-  }
-};
-
-// MAIN APP COMPONENT
-export default function App() {
-  // Auth state
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [isLoading, setIsLoading] = useState(true);
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [showAuthScreen, setShowAuthScreen] = useState<'login' | 'signup'>('login');
-
-  // App state
+function MainApp() {
+  const { logout } = useAuth(); // Get the logout function
   const [activeTab, setActiveTab] = useState<string>('live');
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
-  const [btStatus, setBtStatus] = useState<'connected' | 'connecting' | 'disconnected'>('disconnected');
+  const [btStatus, setBtStatus] = useState<
+    'connected' | 'connecting' | 'disconnected'
+  >('disconnected');
   const [readings, setReadings] = useState<Reading[]>([]);
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
-  const [filtered, setFiltered] = useState<Reading[]>([]);
+
+  // REMOVED: startDate, endDate, filtered state (moved to AqiReportScreen)
+
   const [deviceModalVisible, setDeviceModalVisible] = useState<boolean>(false);
   const [devices, setDevices] = useState<any[]>([]);
   const [scanning, setScanning] = useState<boolean>(false);
   const [connectedDevice, setConnectedDevice] = useState<any>(null);
   const [lastDataTime, setLastDataTime] = useState<Date | null>(null);
-  
-  // NEW: Task 4 - MAC ID Display
-  const [connectedDeviceMAC, setConnectedDeviceMAC] = useState<string | null>(null);
-  const [connectedDeviceName, setConnectedDeviceName] = useState<string | null>(null);
-  
-  // NEW: Task 3 - Signal Strength
-  const [signalStrength, setSignalStrength] = useState<number>(0); // 0-4 bars
-  const [rssi, setRSSI] = useState<number>(-100);
 
   const scrollViewRef = useRef<ScrollView>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const bleSubscription = useRef<any>(null);
   const classicReadInterval = useRef<any>(null);
   const dataCheckInterval = useRef<any>(null);
-  const signalCheckInterval = useRef<any>(null);
   const connectedDeviceType = useRef<'BLE' | 'Classic' | null>(null);
-
-  // Auth form states
-  const [authEmail, setAuthEmail] = useState('');
-  const [authPassword, setAuthPassword] = useState('');
-  const [authName, setAuthName] = useState('');
-  const [authLoading, setAuthLoading] = useState(false);
-  const fadeAuthAnim = useRef(new Animated.Value(0)).current;
-
-  // Check authentication on mount
-  useEffect(() => {
-    checkAuthStatus();
-  }, []);
-
-  const checkAuthStatus = async () => {
-    const user = await checkAuth();
-    if (user) {
-      setCurrentUser(user);
-      setIsAuthenticated(true);
-    }
-    setIsLoading(false);
-  };
-
-  // Auth handlers
-  const handleLogin = async () => {
-    if (!authEmail || !authPassword) {
-      Alert.alert('Error', 'Please fill in all fields');
-      return;
-    }
-
-    setAuthLoading(true);
-    
-    // Simulate API call - Replace with your actual API
-    setTimeout(async () => {
-      // For demo: accept any email/password
-      const user = { email: authEmail, name: authEmail.split('@')[0] };
-      await saveAuth(user);
-      setCurrentUser(user);
-      setIsAuthenticated(true);
-      setAuthLoading(false);
-      
-      // Reset form
-      setAuthEmail('');
-      setAuthPassword('');
-    }, 1000);
-  };
-
-  const handleSignup = async () => {
-    if (!authEmail || !authPassword || !authName) {
-      Alert.alert('Error', 'Please fill in all fields');
-      return;
-    }
-
-    setAuthLoading(true);
-    
-    // Simulate API call - Replace with your actual API
-    setTimeout(async () => {
-      const user = { email: authEmail, name: authName };
-      await saveAuth(user);
-      setCurrentUser(user);
-      setIsAuthenticated(true);
-      setAuthLoading(false);
-      
-      // Reset form
-      setAuthEmail('');
-      setAuthPassword('');
-      setAuthName('');
-    }, 1000);
-  };
-
-  const handleLogout = async () => {
-    await clearAuth();
-    setIsAuthenticated(false);
-    setCurrentUser(null);
-    
-    // Disconnect device on logout
-    if (connectedDevice) {
-      await disconnectDevice();
-    }
-  };
 
   // Request permissions
   useEffect(() => {
-    if (isAuthenticated) {
-      requestPermissions();
-    }
+    requestPermissions();
     return () => {
       if (bleSubscription.current) {
         bleSubscription.current.remove();
@@ -261,12 +78,9 @@ export default function App() {
       if (dataCheckInterval.current) {
         clearInterval(dataCheckInterval.current);
       }
-      if (signalCheckInterval.current) {
-        clearInterval(signalCheckInterval.current);
-      }
       bleManager.destroy();
     };
-  }, [isAuthenticated]);
+  }, []);
 
   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
@@ -287,9 +101,17 @@ export default function App() {
     if (btStatus === 'connected') {
       Animated.loop(
         Animated.sequence([
-          Animated.timing(pulseAnim, { toValue: 1.3, duration: 1000, useNativeDriver: true }),
-          Animated.timing(pulseAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
-        ])
+          Animated.timing(pulseAnim, {
+            toValue: 1.3,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseAnim, {
+            toValue: 1,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ]),
       ).start();
     }
   }, [btStatus]);
@@ -303,12 +125,7 @@ export default function App() {
     }
   }, [readings]);
 
-  // Filter effect
-  useEffect(() => {
-    if (!startDate && !endDate) {
-      setFiltered(filterReadings(readings, null, null));
-    }
-  }, [readings, startDate, endDate]);
+  // REMOVED: Filter effect (moved to AqiReportScreen)
 
   // Data check interval
   useEffect(() => {
@@ -316,13 +133,14 @@ export default function App() {
       dataCheckInterval.current = setInterval(() => {
         if (lastDataTime) {
           const now = new Date();
-          const timeSinceLastData = (now.getTime() - lastDataTime.getTime()) / 1000;
-          
+          const timeSinceLastData =
+            (now.getTime() - lastDataTime.getTime()) / 1000;
+
           if (timeSinceLastData > 15) {
             Alert.alert(
               'No Data Received',
               'No data received from device in the last 15 seconds. Connection may be lost.',
-              [{ text: 'OK' }]
+              [{ text: 'OK' }],
             );
           }
         }
@@ -340,31 +158,6 @@ export default function App() {
       }
     };
   }, [btStatus, lastDataTime]);
-
-  // NEW: Task 3 - Monitor signal strength for BLE
-  const monitorSignalStrength = (device: any) => {
-    if (signalCheckInterval.current) {
-      clearInterval(signalCheckInterval.current);
-    }
-    
-    signalCheckInterval.current = setInterval(async () => {
-      try {
-        const rssiValue = await device.readRSSI();
-        setRSSI(rssiValue);
-        
-        // Convert RSSI to signal bars (0-4)
-        let bars = 0;
-        if (rssiValue > -60) bars = 4;
-        else if (rssiValue > -70) bars = 3;
-        else if (rssiValue > -80) bars = 2;
-        else if (rssiValue > -90) bars = 1;
-        
-        setSignalStrength(bars);
-      } catch (error) {
-        console.log('RSSI read error:', error);
-      }
-    }, 5000); // Check every 5 seconds
-  };
 
   const scanForDevices = async () => {
     setScanning(true);
@@ -391,7 +184,7 @@ export default function App() {
     // Scan for Classic Bluetooth devices
     try {
       const paired = await RNBluetoothClassic.getBondedDevices();
-      paired.forEach(device => {
+      paired.forEach((device) => {
         if (!foundDevices.has(device.address)) {
           foundDevices.set(device.address, {
             id: device.address,
@@ -417,23 +210,18 @@ export default function App() {
       setBtStatus('connecting');
       bleManager.stopDeviceScan();
 
-      // NEW: Task 4 - Store MAC and Name
-      setConnectedDeviceMAC(deviceInfo.id);
-      setConnectedDeviceName(deviceInfo.name);
-
       if (deviceInfo.type === 'BLE') {
         // Connect to BLE device
-        const device = await bleManager.connectToDevice(deviceInfo.rawDevice.id);
+        const device = await bleManager.connectToDevice(
+          deviceInfo.rawDevice.id,
+        );
         await device.discoverAllServicesAndCharacteristics();
-        
+
         setConnectedDevice(device);
         connectedDeviceType.current = 'BLE';
         setBtStatus('connected');
         setDeviceModalVisible(false);
         setLastDataTime(new Date());
-
-        // NEW: Task 3 - Start monitoring signal strength
-        monitorSignalStrength(device);
 
         bleSubscription.current = device.monitorCharacteristicForService(
           SERVICE_UUID,
@@ -444,18 +232,23 @@ export default function App() {
               return;
             }
             if (characteristic?.value) {
-              const rawData = Buffer.from(characteristic.value, 'base64').toString('utf-8');
+              const rawData = Buffer.from(
+                characteristic.value,
+                'base64',
+              ).toString('utf-8');
               parseData(rawData);
               setLastDataTime(new Date());
             }
-          }
+          },
         );
 
         Alert.alert('Success', `Connected to ${deviceInfo.name} (BLE)`);
       } else {
         // Connect to Classic Bluetooth device
-        const device = await RNBluetoothClassic.connectToDevice(deviceInfo.rawDevice.address);
-        
+        const device = await RNBluetoothClassic.connectToDevice(
+          deviceInfo.rawDevice.address,
+        );
+
         setConnectedDevice(device);
         connectedDeviceType.current = 'Classic';
         setBtStatus('connected');
@@ -481,8 +274,6 @@ export default function App() {
     } catch (error: any) {
       console.error('Connection error:', error);
       setBtStatus('disconnected');
-      setConnectedDeviceMAC(null);
-      setConnectedDeviceName(null);
       Alert.alert('Connection Failed', error.message);
     }
   };
@@ -502,10 +293,6 @@ export default function App() {
           clearInterval(dataCheckInterval.current);
           dataCheckInterval.current = null;
         }
-        if (signalCheckInterval.current) {
-          clearInterval(signalCheckInterval.current);
-          signalCheckInterval.current = null;
-        }
 
         if (connectedDeviceType.current === 'BLE') {
           await connectedDevice.cancelConnection();
@@ -517,10 +304,6 @@ export default function App() {
         connectedDeviceType.current = null;
         setBtStatus('disconnected');
         setLastDataTime(null);
-        setConnectedDeviceMAC(null);
-        setConnectedDeviceName(null);
-        setSignalStrength(0);
-        setRSSI(-100);
         Alert.alert('Disconnected', 'Device disconnected successfully');
       } catch (error) {
         console.error('Disconnect error:', error);
@@ -528,68 +311,14 @@ export default function App() {
     }
   };
 
-  const parseData = async (rawData: string) => {
+  const parseData = (rawData: string) => {
     const match = rawData.match(/PM2\.5\(ATM\):\s*([\d.]+)\s*ug\/m3/);
     if (match) {
       const val = parseFloat(match[1]);
-      const timestamp = new Date();
-      
-      // NEW: Task 2 - Save to persistent storage
-      await saveReadingToStorage({
-        timestamp,
-        pm25: val,
-        deviceMAC: connectedDeviceMAC || 'unknown',
-        deviceName: connectedDeviceName || 'unknown'
-      });
-      
       setReadings((prev) => {
-        const next = [...prev, { ts: timestamp, value: val }];
+        const next = [...prev, { ts: new Date(), value: val }];
         return next.length > 500 ? next.slice(-500) : next;
       });
-    }
-  };
-
-  // NEW: Task 2 - Storage functions
-  const saveReadingToStorage = async (data: any) => {
-    try {
-      const key = `@reading_${data.timestamp.getTime()}`;
-      await AsyncStorage.setItem(key, JSON.stringify(data));
-    } catch (error) {
-      console.log('Save reading error:', error);
-    }
-  };
-
-  const loadStoredReadings = async (filters: any = {}) => {
-    try {
-      const keys = await AsyncStorage.getAllKeys();
-      const readingKeys = keys.filter(k => k.startsWith('@reading_'));
-      const items = await AsyncStorage.multiGet(readingKeys);
-      
-      let loadedReadings = items
-        .map(([key, value]) => value ? JSON.parse(value) : null)
-        .filter(Boolean)
-        .map((r: any) => ({
-          ts: new Date(r.timestamp),
-          value: r.pm25,
-          deviceMAC: r.deviceMAC,
-          deviceName: r.deviceName
-        }));
-
-      // Apply filters
-      if (filters.startDate) {
-        loadedReadings = loadedReadings.filter((r: any) => r.ts >= filters.startDate);
-      }
-      if (filters.endDate) {
-        loadedReadings = loadedReadings.filter((r: any) => r.ts <= filters.endDate);
-      }
-      if (filters.deviceMAC) {
-        loadedReadings = loadedReadings.filter((r: any) => r.deviceMAC === filters.deviceMAC);
-      }
-
-      return loadedReadings;
-    } catch (error) {
-      console.log('Load readings error:', error);
-      return [];
     }
   };
 
@@ -602,7 +331,7 @@ export default function App() {
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Disconnect', onPress: disconnectDevice, style: 'destructive' },
-        ]
+        ],
       );
     } else {
       // If not connected, show device list
@@ -615,212 +344,43 @@ export default function App() {
   const isConnected = btStatus === 'connected';
 
   const btBadge = {
-    text: btStatus === 'connected' ? 'Connected' : btStatus === 'connecting' ? 'Connecting' : 'Disconnected',
-    color: btStatus === 'connected' ? '#22c55e' : btStatus === 'connecting' ? '#eab308' : '#ef4444',
-    dotColor: btStatus === 'connected' ? '#4ade80' : btStatus === 'connecting' ? '#facc15' : '#71717a',
-    liveText: btStatus === 'connected' ? 'Receiving' : btStatus === 'connecting' ? 'Connecting...' : 'Idle',
+    text:
+      btStatus === 'connected'
+        ? 'Connected'
+        : btStatus === 'connecting'
+        ? 'Connecting'
+        : 'Disconnected',
+    color:
+      btStatus === 'connected'
+        ? '#22c55e'
+        : btStatus === 'connecting'
+        ? '#eab308'
+        : '#ef4444',
+    dotColor:
+      btStatus === 'connected'
+        ? '#4ade80'
+        : btStatus === 'connecting'
+        ? '#facc15'
+        : '#71717a',
+    liveText:
+      btStatus === 'connected'
+        ? 'Receiving'
+        : btStatus === 'connecting'
+        ? 'Connecting...'
+        : 'Idle',
   };
 
-  const applyFilter = async () => {
-    const filters: any = {};
-    if (startDate) filters.startDate = new Date(startDate + 'T00:00:00');
-    if (endDate) filters.endDate = new Date(endDate + 'T23:59:59');
-    if (connectedDeviceMAC) filters.deviceMAC = connectedDeviceMAC;
-    
-    const stored = await loadStoredReadings(filters);
-    setFiltered(stored as Reading[]);
-  };
+  // REMOVED: applyFilter, clearFilter (moved to AqiReportScreen)
 
-  const clearFilter = () => {
-    setStartDate('');
-    setEndDate('');
-    setFiltered(filterReadings(readings, null, null));
-  };
-
-  // NEW: Signal Indicator Component
-  const SignalIndicator = ({ strength }: { strength: number }) => {
-    const bars = [1, 2, 3, 4];
-    
-    return (
-      <View style={styles.signalContainer}>
-        {bars.map((bar) => (
-          <View
-            key={bar}
-            style={[
-              styles.signalBar,
-              { height: bar * 3 + 4 },
-              bar <= strength ? styles.signalBarActive : styles.signalBarInactive
-            ]}
-          />
-        ))}
-      </View>
-    );
-  };
-
-  // Auth fade animation
-  useEffect(() => {
-    if (!isAuthenticated && !isLoading) {
-      Animated.timing(fadeAuthAnim, {
-        toValue: 1,
-        duration: 600,
-        useNativeDriver: true,
-      }).start();
-    }
-  }, [isAuthenticated, isLoading]);
-
-  // Loading screen
-  if (isLoading) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#18181b" />
-        <View style={styles.loadingContainer}>
-          <Text style={styles.logoText}>Shudhvayu</Text>
-          <Text style={styles.loadingText}>Loading...</Text>
-        </View>
-      </SafeAreaView>
-    );
-  }
-
-  // AUTH SCREENS
-  if (!isAuthenticated) {
-    return (
-      <SafeAreaView style={styles.container}>
-        <StatusBar barStyle="light-content" backgroundColor="#18181b" />
-        <Animated.View style={[styles.authContainer, { opacity: fadeAuthAnim }]}>
-          <View style={styles.authHeader}>
-            <Text style={styles.logoText}>Shudhvayu</Text>
-            <Text style={styles.tagline}>Clean Air, Better Life</Text>
-          </View>
-
-          <View style={styles.authCard}>
-            {showAuthScreen === 'login' ? (
-              // LOGIN FORM
-              <>
-                <Text style={styles.authTitle}>Welcome Back</Text>
-                <Text style={styles.authSubtitle}>Sign in to continue</Text>
-
-                <View style={styles.inputGroup}>
-                  <View style={styles.inputWrapper}>
-                    <Icon name="mail" size={20} color="#a1a1aa" />
-                    <TextInput
-                      style={styles.authInput}
-                      placeholder="Email"
-                      placeholderTextColor="#71717a"
-                      value={authEmail}
-                      onChangeText={setAuthEmail}
-                      keyboardType="email-address"
-                      autoCapitalize="none"
-                    />
-                  </View>
-
-                  <View style={styles.inputWrapper}>
-                    <Icon name="lock" size={20} color="#a1a1aa" />
-                    <TextInput
-                      style={styles.authInput}
-                      placeholder="Password"
-                      placeholderTextColor="#71717a"
-                      value={authPassword}
-                      onChangeText={setAuthPassword}
-                      secureTextEntry
-                    />
-                  </View>
-                </View>
-
-                <TouchableOpacity
-                  style={styles.authButton}
-                  onPress={handleLogin}
-                  disabled={authLoading}
-                >
-                  <Text style={styles.authButtonText}>
-                    {authLoading ? 'Signing in...' : 'Sign In'}
-                  </Text>
-                </TouchableOpacity>
-
-                <View style={styles.authFooter}>
-                  <Text style={styles.authFooterText}>Don't have an account? </Text>
-                  <TouchableOpacity onPress={() => setShowAuthScreen('signup')}>
-                    <Text style={styles.authLink}>Sign Up</Text>
-                  </TouchableOpacity>
-                </View>
-              </>
-            ) : (
-              // SIGNUP FORM
-              <>
-                <Text style={styles.authTitle}>Create Account</Text>
-                <Text style={styles.authSubtitle}>Join Shudhvayu today</Text>
-
-                <View style={styles.inputGroup}>
-                  <View style={styles.inputWrapper}>
-                    <Icon name="user" size={20} color="#a1a1aa" />
-                    <TextInput
-                      style={styles.authInput}
-                      placeholder="Full Name"
-                      placeholderTextColor="#71717a"
-                      value={authName}
-                      onChangeText={setAuthName}
-                    />
-                  </View>
-
-                  <View style={styles.inputWrapper}>
-                    <Icon name="mail" size={20} color="#a1a1aa" />
-                    <TextInput
-                      style={styles.authInput}
-                      placeholder="Email"
-                      placeholderTextColor="#71717a"
-                      value={authEmail}
-                      onChangeText={setAuthEmail}
-                      keyboardType="email-address"
-                      autoCapitalize="none"
-                    />
-                  </View>
-
-                  <View style={styles.inputWrapper}>
-                    <Icon name="lock" size={20} color="#a1a1aa" />
-                    <TextInput
-                      style={styles.authInput}
-                      placeholder="Password"
-                      placeholderTextColor="#71717a"
-                      value={authPassword}
-                      onChangeText={setAuthPassword}
-                      secureTextEntry
-                    />
-                  </View>
-                </View>
-
-                <TouchableOpacity
-                  style={styles.authButton}
-                  onPress={handleSignup}
-                  disabled={authLoading}
-                >
-                  <Text style={styles.authButtonText}>
-                    {authLoading ? 'Creating account...' : 'Sign Up'}
-                  </Text>
-                </TouchableOpacity>
-
-                <View style={styles.authFooter}>
-                  <Text style={styles.authFooterText}>Already have an account? </Text>
-                  <TouchableOpacity onPress={() => setShowAuthScreen('login')}>
-                    <Text style={styles.authLink}>Sign In</Text>
-                  </TouchableOpacity>
-                </View>
-              </>
-            )}
-          </View>
-
-          <Text style={styles.authVersion}>Version 1.0.0</Text>
-        </Animated.View>
-      </SafeAreaView>
-    );
-  }
-
-  // MAIN APP (After Authentication)
   return (
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#18181b" />
 
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => setMenuOpen(true)} style={styles.headerButton}>
+        <TouchableOpacity
+          onPress={() => setMenuOpen(true)}
+          style={styles.headerButton}>
           <Icon name="menu" size={24} color="#a1a1aa" />
         </TouchableOpacity>
 
@@ -829,14 +389,16 @@ export default function App() {
         </TouchableOpacity>
 
         <TouchableOpacity onPress={openDeviceModal} style={styles.btButton}>
-          <View style={[styles.btCircle, { backgroundColor: isConnected ? '#27272a' : '#3f3f46' }]}>
-            <Icon name="bluetooth" size={20} color={btStatus === 'connected' ? '#3b82f6' : '#a1a1aa'} />
-            {/* NEW: Task 3 - Signal Indicator */}
-            {btStatus === 'connected' && connectedDeviceType.current === 'BLE' && (
-              <View style={styles.signalOverlay}>
-                <SignalIndicator strength={signalStrength} />
-              </View>
-            )}
+          <View
+            style={[
+              styles.btCircle,
+              { backgroundColor: isConnected ? '#27272a' : '#3f3f46' },
+            ]}>
+            <Icon
+              name="bluetooth"
+              size={20}
+              color={btStatus === 'connected' ? '#3b82f6' : '#a1a1aa'}
+            />
           </View>
           <View style={[styles.btBadge, { backgroundColor: btBadge.color }]}>
             <Text style={styles.btBadgeText}>{btBadge.text}</Text>
@@ -844,32 +406,35 @@ export default function App() {
         </TouchableOpacity>
       </View>
 
-      {/* NEW: Task 4 - MAC ID Display in Header */}
-      {connectedDeviceMAC && (
-        <View style={styles.macHeader}>
-          <Text style={styles.macLabel}>Device:</Text>
-          <Text style={styles.macName}>{connectedDeviceName}</Text>
-          <Text style={styles.macAddress}>MAC: {connectedDeviceMAC}</Text>
-        </View>
-      )}
-
       {/* Tab Selector */}
       <View style={styles.tabContainer}>
         <View style={styles.tabInner}>
           <TouchableOpacity
             onPress={() => setActiveTab('live')}
-            style={[styles.tab, activeTab === 'live' && styles.tabActive]}
-          >
-            <Icon name="activity" size={16} color={activeTab === 'live' ? '#18181b' : '#d4d4d8'} />
-            <Text style={[styles.tabText, activeTab === 'live' && styles.tabTextActive]}>Live PM2.5</Text>
+            style={[styles.tab, activeTab === 'live' && styles.tabActive]}>
+            <Icon
+              name="activity"
+              size={16}
+              color={activeTab === 'live' ? '#18181b' : '#d4d4d8'}
+            />
+            <Text
+              style={[styles.tabText, activeTab === 'live' && styles.tabTextActive]}>
+              Live PM2.5
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             onPress={() => setActiveTab('aqi')}
-            style={[styles.tab, activeTab === 'aqi' && styles.tabActive]}
-          >
-            <Icon name="wind" size={16} color={activeTab === 'aqi' ? '#18181b' : '#d4d4d8'} />
-            <Text style={[styles.tabText, activeTab === 'aqi' && styles.tabTextActive]}>AQI Report</Text>
+            style={[styles.tab, activeTab === 'aqi' && styles.tabActive]}>
+            <Icon
+              name="wind"
+              size={16}
+              color={activeTab === 'aqi' ? '#18181b' : '#d4d4d8'}
+            />
+            <Text
+              style={[styles.tabText, activeTab === 'aqi' && styles.tabTextActive]}>
+              AQI Report
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -885,7 +450,7 @@ export default function App() {
           <View style={styles.menu}>
             <View style={styles.menuHeader}>
               <View>
-                <Text style={styles.menuTitle}>Hi, {currentUser?.name || 'Partner'}</Text>
+                <Text style={styles.menuTitle}>Hi, Partner</Text>
                 <Text style={styles.menuSubtitle}>Shudhvayu</Text>
               </View>
               <TouchableOpacity onPress={() => setMenuOpen(false)}>
@@ -896,45 +461,48 @@ export default function App() {
             <ScrollView style={styles.menuItems}>
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={() => { setActiveTab('profile'); setMenuOpen(false); }}
-              >
+                onPress={() => {
+                  setActiveTab('profile');
+                  setMenuOpen(false);
+                }}>
                 <Icon name="user" size={20} color="#d4d4d8" />
                 <Text style={styles.menuItemText}>Profile</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={() => Linking.openURL('https://shudhvayu.com/about')}
-              >
+                onPress={() => Linking.openURL('https://shudhvayu.com/about')}>
                 <Icon name="info" size={20} color="#d4d4d8" />
                 <Text style={styles.menuItemText}>About Us</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={() => Linking.openURL('https://shudhvayu.com/privacy')}
-              >
+                onPress={() => Linking.openURL('https://shudhvayu.com/privacy')}>
                 <Icon name="shield" size={20} color="#d4d4d8" />
                 <Text style={styles.menuItemText}>Privacy & Security</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={() => { setActiveTab('support'); setMenuOpen(false); }}
-              >
+                onPress={() => {
+                  setActiveTab('support');
+                  setMenuOpen(false);
+                }}>
                 <Icon name="bell" size={20} color="#d4d4d8" />
                 <Text style={styles.menuItemText}>Support</Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 style={styles.menuItem}
-                onPress={() => Linking.openURL('https://shudhvayu.com/terms')}
-              >
+                onPress={() => Linking.openURL('https://shudhvayu.com/terms')}>
                 <Icon name="info" size={20} color="#d4d4d8" />
                 <Text style={styles.menuItemText}>Terms of Services</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={[styles.menuItem, styles.logoutItem]} onPress={handleLogout}>
+              <TouchableOpacity
+                style={[styles.menuItem, styles.logoutItem]}
+                onPress={logout}>
                 <Icon name="logout" size={20} color="#f87171" />
                 <Text style={styles.logoutText}>Logout</Text>
               </TouchableOpacity>
@@ -948,12 +516,14 @@ export default function App() {
         <View style={styles.modalOverlay}>
           <View style={styles.deviceModalContent}>
             <Text style={styles.deviceModalTitle}>Select Bluetooth Device</Text>
-            
+
             <View style={styles.deviceListContainer}>
               {scanning ? (
                 <Text style={styles.scanningText}>Scanning for devices...</Text>
               ) : devices.length === 0 ? (
-                <Text style={styles.noDevicesText}>No devices found. Tap Refresh to scan again.</Text>
+                <Text style={styles.noDevicesText}>
+                  No devices found. Tap Refresh to scan again.
+                </Text>
               ) : (
                 <FlatList
                   data={devices}
@@ -961,8 +531,7 @@ export default function App() {
                   renderItem={({ item }) => (
                     <TouchableOpacity
                       style={styles.deviceItem}
-                      onPress={() => connectToDevice(item)}
-                    >
+                      onPress={() => connectToDevice(item)}>
                       <View style={styles.deviceInfo}>
                         <Text style={styles.deviceName}>{item.name}</Text>
                         <Text style={styles.deviceId}>{item.id}</Text>
@@ -979,8 +548,7 @@ export default function App() {
             <TouchableOpacity
               style={styles.refreshBtn}
               onPress={scanForDevices}
-              disabled={scanning}
-            >
+              disabled={scanning}>
               <Text style={styles.refreshBtnText}>
                 {scanning ? 'Scanning...' : '🔄 Refresh'}
               </Text>
@@ -991,8 +559,7 @@ export default function App() {
               onPress={() => {
                 bleManager.stopDeviceScan();
                 setDeviceModalVisible(false);
-              }}
-            >
+              }}>
               <Text style={styles.closeBtnText}>Close</Text>
             </TouchableOpacity>
           </View>
@@ -1001,342 +568,60 @@ export default function App() {
 
       {/* Content */}
       <ScrollView style={styles.content}>
-        {/* LIVE TAB */}
-        {activeTab === 'live' && (
-          <View style={styles.pageContainer}>
-            {/* Live Header */}
-            <View style={styles.liveHeaderContainer}>
-              <View style={styles.liveHeaderTop}>
-                <View style={styles.liveTitle}>
-                  <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-                    <Icon name="radio" size={20} color="#ef4444" />
-                  </Animated.View>
-                  <Text style={styles.liveTitleText}>Live PM2.5</Text>
-                  <View style={styles.liveValue}>
-                    <Text style={styles.liveValueText}>
-                      {isConnected && latest ? `${latest.value} ug/m³` : '—'}
-                    </Text>
-                  </View>
-                </View>
-                <View style={styles.liveStatus}>
-                  <View style={[styles.statusDot, { backgroundColor: btBadge.dotColor }]} />
-                  <Text style={styles.statusText}>{btBadge.liveText}</Text>
-                </View>
-              </View>
-            </View>
+        {/*
+          ALL THE UI LOGIC IS NOW GONE.
+          We replace it with our new screen components.
+        */}
+        {activeTab === 'live' && 
+          <LiveFeedScreen
+            btStatus={btStatus}
+            readings={readings}
+            latest={latest}
+            isConnected={isConnected}
+            btBadge={btBadge}
+            pulseAnim={pulseAnim}
+            scrollViewRef={scrollViewRef}
+          />
+        }
 
-            {/* NEW: Task 4 - Device Info Panel */}
-            {btStatus === 'connected' && connectedDeviceMAC && (
-              <View style={styles.deviceInfoPanel}>
-                <Text style={styles.deviceInfoTitle}>📱 Connected Device</Text>
-                <View style={styles.deviceInfoRow}>
-                  <Text style={styles.deviceInfoLabel}>Name:</Text>
-                  <Text style={styles.deviceInfoValue}>{connectedDeviceName}</Text>
-                </View>
-                <View style={styles.deviceInfoRow}>
-                  <Text style={styles.deviceInfoLabel}>MAC Address:</Text>
-                  <Text style={styles.deviceInfoValue}>{connectedDeviceMAC}</Text>
-                </View>
-                <View style={styles.deviceInfoRow}>
-                  <Text style={styles.deviceInfoLabel}>Type:</Text>
-                  <Text style={styles.deviceInfoValue}>{connectedDeviceType.current}</Text>
-                </View>
-                {connectedDeviceType.current === 'BLE' && (
-                  <View style={styles.deviceInfoRow}>
-                    <Text style={styles.deviceInfoLabel}>Signal:</Text>
-                    <View style={styles.deviceInfoSignal}>
-                      <SignalIndicator strength={signalStrength} />
-                      <Text style={styles.rssiText}>{rssi} dBm</Text>
-                    </View>
-                  </View>
-                )}
-              </View>
-            )}
+        {activeTab === 'aqi' && <AqiReportScreen readings={readings} />}
 
-            {/* Live Feed Table */}
-            <View style={styles.tableContainer}>
-              <View style={styles.tableHeader}>
-                <Icon name="activity" size={16} color="#e4e4e7" />
-                <Text style={styles.tableHeaderText}>Live Feed - PM2.5</Text>
-              </View>
+        {activeTab === 'profile' && <ProfileScreen />}
 
-              {btStatus === 'disconnected' ? (
-                <View style={styles.disconnectedContainer}>
-                  <View style={styles.disconnectedIcons}>
-                    <Icon name="alert" size={32} color="#fbbf24" />
-                    <Icon name="bluetooth" size={32} color="#fbbf24" />
-                  </View>
-                  <Text style={styles.disconnectedTitle}>Bluetooth Disconnected</Text>
-                  <Text style={styles.disconnectedText}>
-                    Tap the <Text style={styles.bold}>Bluetooth icon</Text> to connect your Shudhvayu device.
-                  </Text>
-                </View>
-              ) : readings.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <Text style={styles.emptyText}>
-                    {btStatus === 'connecting' ? 'Connecting...' : 'Waiting for data...'}
-                  </Text>
-                </View>
-              ) : (
-                <ScrollView ref={scrollViewRef} style={styles.tableScroll} nestedScrollEnabled>
-                  <View style={styles.tableHeaderRow}>
-                    <Text style={[styles.tableHeaderCell, styles.col35]}>Date</Text>
-                    <Text style={[styles.tableHeaderCell, styles.col35]}>Time</Text>
-                    <Text style={[styles.tableHeaderCell, styles.col30]}>PM2.5(ATM)</Text>
-                  </View>
-                  {readings.map((r, i) => (
-                    <View key={i} style={[styles.tableRow, i % 2 === 1 && styles.tableRowAlt]}>
-                      <Text style={[styles.tableCell, styles.col35]}>{fmtDate(r.ts)}</Text>
-                      <Text style={[styles.tableCell, styles.col35]}>{fmtTime(r.ts)}</Text>
-                      <Text style={[styles.tableCell, styles.col30]}>{r.value} ug/m3</Text>
-                    </View>
-                  ))}
-                </ScrollView>
-              )}
-            </View>
-          </View>
-        )}
-
-        {/* AQI REPORT TAB */}
-        {activeTab === 'aqi' && (
-          <View style={styles.pageContainer}>
-            {/* AQI Header with Filters */}
-            <View style={styles.aqiHeaderContainer}>
-              <View style={styles.aqiTitle}>
-                <Icon name="wind" size={20} color="#fff" />
-                <Text style={styles.aqiTitleText}>AQI Report</Text>
-              </View>
-
-              <View style={styles.filterContainer}>
-                <View style={styles.filterRow}>
-                  <View style={styles.filterGroup}>
-                    <Text style={styles.filterLabel}>START DATE</Text>
-                    <TextInput
-                      style={styles.dateInput}
-                      placeholder="YYYY-MM-DD"
-                      placeholderTextColor="#71717a"
-                      value={startDate}
-                      onChangeText={setStartDate}
-                    />
-                  </View>
-
-                  <View style={styles.filterGroup}>
-                    <Text style={styles.filterLabel}>END DATE</Text>
-                    <TextInput
-                      style={styles.dateInput}
-                      placeholder="YYYY-MM-DD"
-                      placeholderTextColor="#71717a"
-                      value={endDate}
-                      onChangeText={setEndDate}
-                    />
-                  </View>
-                </View>
-
-                <View style={styles.filterButtons}>
-                  <TouchableOpacity style={styles.applyButton} onPress={applyFilter}>
-                    <Text style={styles.applyButtonText}>Apply</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity style={styles.clearButton} onPress={clearFilter}>
-                    <Text style={styles.clearButtonText}>Clear</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            </View>
-
-            {/* Results Table */}
-            <View style={styles.tableContainer}>
-              <View style={styles.tableHeader}>
-                <Icon name="activity" size={16} color="#e4e4e7" />
-                <Text style={styles.tableHeaderText}>Recorded data</Text>
-              </View>
-
-              <ScrollView style={styles.tableScroll} nestedScrollEnabled>
-                <View style={styles.tableHeaderRow}>
-                  <Text style={[styles.tableHeaderCell, styles.col35]}>Date</Text>
-                  <Text style={[styles.tableHeaderCell, styles.col35]}>Time</Text>
-                  <Text style={[styles.tableHeaderCell, styles.col30]}>PM2.5(ATM)</Text>
-                </View>
-                {filtered.length === 0 ? (
-                  <View style={styles.emptyContainer}>
-                    <Text style={styles.emptyText}>No data for selected range.</Text>
-                  </View>
-                ) : (
-                  filtered.map((r, i) => (
-                    <View key={i} style={[styles.tableRow, i % 2 === 1 && styles.tableRowAlt]}>
-                      <Text style={[styles.tableCell, styles.col35]}>{fmtDate(r.ts)}</Text>
-                      <Text style={[styles.tableCell, styles.col35]}>{fmtTime(r.ts)}</Text>
-                      <Text style={[styles.tableCell, styles.col30]}>{r.value} ug/m3</Text>
-                    </View>
-                  ))
-                )}
-              </ScrollView>
-            </View>
-          </View>
-        )}
-
-        {/* PROFILE TAB */}
-        {activeTab === 'profile' && (
-          <View style={styles.profileContainer}>
-            <View style={styles.profileHeader}>
-              <Text style={styles.profileTitle}>Profile</Text>
-              <TouchableOpacity style={styles.editButton}>
-                <Icon name="edit" size={20} color="#d4d4d8" />
-              </TouchableOpacity>
-            </View>
-
-            <View style={styles.profileCard}>
-              <View style={styles.profileTop}>
-                <View style={styles.avatar}>
-                  <Icon name="user" size={40} color="#fff" />
-                </View>
-                <View>
-                  <Text style={styles.profileName}>{currentUser?.name || 'Partner'}</Text>
-                  <Text style={styles.profileSubtitle}>Shudhvayu User</Text>
-                </View>
-              </View>
-
-              <View style={styles.profileDetails}>
-                <View style={styles.profileRow}>
-                  <Text style={styles.profileLabel}>Email</Text>
-                  <Text style={styles.profileValue}>{currentUser?.email || 'N/A'}</Text>
-                </View>
-                <View style={[styles.profileRow, styles.profileRowLast]}>
-                  <Text style={styles.profileLabel}>Member Since</Text>
-                  <Text style={styles.profileValue}>{fmtDate(new Date())}</Text>
-                </View>
-              </View>
-            </View>
-
-            <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
-              <Icon name="logout" size={20} color="#f87171" />
-              <Text style={styles.logoutButtonText}>Logout</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* SUPPORT TAB */}
-        {activeTab === 'support' && (
-          <View style={styles.supportContainer}>
-            <Text style={styles.supportTitle}>Support</Text>
-            <View style={styles.supportCard}>
-              <Text style={styles.supportText}>Need help? Contact support@shudhvayu.app</Text>
-            </View>
-          </View>
-        )}
+        {activeTab === 'support' && <SupportScreen />}
       </ScrollView>
     </SafeAreaView>
   );
 }
 
+// These are the root components that handle auth
+export default function App() {
+  console.log('[APP] App component rendering');
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  );
+}
+
+function AppContent() {
+  console.log('[APP] AppContent rendering');
+  const { isAuthenticated } = useAuth();
+
+  if (!isAuthenticated) {
+    return <LoginScreen />;
+  }
+  console.log('[APP] Rendering MainApp');
+  return <MainApp />;
+}
+
+// STYLES: These are only the styles needed by MainApp.
+// All screen-specific styles have been moved to their own files.
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#18181b',
   },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  logoText: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 8,
-  },
-  loadingText: {
-    fontSize: 14,
-    color: '#a1a1aa',
-  },
-  // Auth Styles
-  authContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 24,
-  },
-  authHeader: {
-    alignItems: 'center',
-    marginBottom: 48,
-  },
-  tagline: {
-    fontSize: 14,
-    color: '#a1a1aa',
-    marginTop: 8,
-  },
-  authCard: {
-    width: '100%',
-    maxWidth: 400,
-    backgroundColor: '#27272a',
-    borderRadius: 16,
-    padding: 32,
-    borderWidth: 1,
-    borderColor: '#3f3f46',
-  },
-  authTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 8,
-  },
-  authSubtitle: {
-    fontSize: 14,
-    color: '#a1a1aa',
-    marginBottom: 24,
-  },
-  inputGroup: {
-    gap: 16,
-    marginBottom: 24,
-  },
-  inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#18181b',
-    borderWidth: 1,
-    borderColor: '#3f3f46',
-    borderRadius: 8,
-    paddingHorizontal: 16,
-    height: 48,
-  },
-  authInput: {
-    flex: 1,
-    color: '#fff',
-    fontSize: 16,
-    marginLeft: 12,
-  },
-  authButton: {
-    backgroundColor: '#fff',
-    borderRadius: 8,
-    height: 48,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-  authButtonText: {
-    color: '#18181b',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  authFooter: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  authFooterText: {
-    color: '#a1a1aa',
-    fontSize: 14,
-  },
-  authLink: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  authVersion: {
-    marginTop: 32,
-    color: '#71717a',
-    fontSize: 12,
-  },
-  // Main App Styles
   header: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1376,51 +661,6 @@ const styles = StyleSheet.create({
     fontSize: 10,
     color: '#fff',
     fontWeight: '600',
-  },
-  signalOverlay: {
-    position: 'absolute',
-    top: -8,
-    right: -8,
-  },
-  signalContainer: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    gap: 2,
-  },
-  signalBar: {
-    width: 3,
-    borderRadius: 1.5,
-  },
-  signalBarActive: {
-    backgroundColor: '#22c55e',
-  },
-  signalBarInactive: {
-    backgroundColor: '#3f3f46',
-  },
-  macHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    backgroundColor: '#27272a',
-    borderBottomWidth: 1,
-    borderBottomColor: '#3f3f46',
-  },
-  macLabel: {
-    fontSize: 12,
-    color: '#a1a1aa',
-    marginRight: 8,
-  },
-  macName: {
-    fontSize: 12,
-    color: '#fff',
-    fontWeight: '600',
-    marginRight: 12,
-  },
-  macAddress: {
-    fontSize: 11,
-    color: '#3b82f6',
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
   },
   tabContainer: {
     alignItems: 'center',
@@ -1522,360 +762,6 @@ const styles = StyleSheet.create({
   },
   content: {
     flex: 1,
-  },
-  pageContainer: {
-    padding: 16,
-  },
-  deviceInfoPanel: {
-    backgroundColor: '#27272a',
-    borderWidth: 1,
-    borderColor: '#3f3f46',
-    borderRadius: 8,
-    padding: 16,
-    marginBottom: 12,
-  },
-  deviceInfoTitle: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 12,
-  },
-  deviceInfoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 8,
-  },
-  deviceInfoLabel: {
-    fontSize: 13,
-    color: '#a1a1aa',
-  },
-  deviceInfoValue: {
-    fontSize: 13,
-    color: '#fff',
-    fontWeight: '500',
-  },
-  deviceInfoSignal: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  rssiText: {
-    fontSize: 11,
-    color: '#a1a1aa',
-    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-  },
-  liveHeaderContainer: {
-    marginBottom: 12,
-    paddingBottom: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#27272a',
-  },
-  liveHeaderTop: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  liveTitle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  liveTitleText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-    marginLeft: 8,
-  },
-  liveValue: {
-    backgroundColor: '#fff',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    marginLeft: 8,
-  },
-  liveValueText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#18181b',
-  },
-  liveStatus: {
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  statusDot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    marginRight: 8,
-  },
-  statusText: {
-    fontSize: 11,
-    color: '#d4d4d8',
-  },
-  tableContainer: {
-    backgroundColor: '#18181b',
-    borderWidth: 1,
-    borderColor: '#27272a',
-    borderRadius: 8,
-    overflow: 'hidden',
-  },
-  tableHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    backgroundColor: '#27272a',
-    borderBottomWidth: 1,
-    borderBottomColor: '#27272a',
-  },
-  tableHeaderText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#e4e4e7',
-    marginLeft: 8,
-  },
-  tableScroll: {
-    maxHeight: 400,
-  },
-  tableHeaderRow: {
-    flexDirection: 'row',
-    backgroundColor: '#3f3f46',
-    padding: 12,
-  },
-  tableHeaderCell: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  col35: {
-    width: '35%',
-  },
-  col30: {
-    width: '30%',
-  },
-  tableRow: {
-    flexDirection: 'row',
-    padding: 12,
-  },
-  tableRowAlt: {
-    backgroundColor: '#0a0a0b',
-  },
-  tableCell: {
-    fontSize: 13,
-    color: '#d4d4d8',
-  },
-  disconnectedContainer: {
-    padding: 32,
-    alignItems: 'center',
-  },
-  disconnectedIcons: {
-    flexDirection: 'row',
-    marginBottom: 16,
-  },
-  disconnectedTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fcd34d',
-    marginBottom: 8,
-  },
-  disconnectedText: {
-    fontSize: 14,
-    color: '#fde68a',
-    textAlign: 'center',
-  },
-  bold: {
-    fontWeight: 'bold',
-  },
-  emptyContainer: {
-    padding: 16,
-  },
-  emptyText: {
-    fontSize: 12,
-    color: '#71717a',
-  },
-  aqiHeaderContainer: {
-    marginBottom: 12,
-  },
-  aqiTitle: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  aqiTitleText: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-    marginLeft: 8,
-  },
-  filterContainer: {
-    backgroundColor: '#27272a',
-    borderWidth: 1,
-    borderColor: '#3f3f46',
-    borderRadius: 8,
-    padding: 12,
-  },
-  filterRow: {
-    flexDirection: 'row',
-    marginBottom: 8,
-  },
-  filterGroup: {
-    flex: 1,
-    marginHorizontal: 4,
-  },
-  filterLabel: {
-    fontSize: 10,
-    color: '#a1a1aa',
-    marginBottom: 4,
-    letterSpacing: 0.5,
-  },
-  dateInput: {
-    backgroundColor: '#18181b',
-    borderWidth: 1,
-    borderColor: '#3f3f46',
-    borderRadius: 6,
-    padding: 8,
-    color: '#fff',
-    fontSize: 14,
-  },
-  filterButtons: {
-    flexDirection: 'row',
-  },
-  applyButton: {
-    flex: 1,
-    backgroundColor: '#fff',
-    padding: 10,
-    borderRadius: 6,
-    alignItems: 'center',
-    marginHorizontal: 4,
-  },
-  applyButtonText: {
-    color: '#18181b',
-    fontSize: 14,
-    fontWeight: '500',
-  },
-  clearButton: {
-    flex: 1,
-    borderWidth: 1,
-    borderColor: '#52525b',
-    padding: 10,
-    borderRadius: 6,
-    alignItems: 'center',
-    marginHorizontal: 4,
-  },
-  clearButtonText: {
-    color: '#e4e4e7',
-    fontSize: 14,
-  },
-  profileContainer: {
-    padding: 16,
-  },
-  profileHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  profileTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  editButton: {
-    padding: 8,
-    backgroundColor: '#27272a',
-    borderWidth: 1,
-    borderColor: '#3f3f46',
-    borderRadius: 8,
-  },
-  profileCard: {
-    backgroundColor: '#27272a',
-    borderWidth: 1,
-    borderColor: '#3f3f46',
-    borderRadius: 8,
-    padding: 24,
-    marginBottom: 24,
-  },
-  profileTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 24,
-  },
-  avatar: {
-    width: 80,
-    height: 80,
-    borderRadius: 40,
-    backgroundColor: '#f97316',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 16,
-  },
-  profileName: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  profileSubtitle: {
-    fontSize: 14,
-    color: '#a1a1aa',
-    marginTop: 4,
-  },
-  profileDetails: {
-    gap: 0,
-  },
-  profileRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#3f3f46',
-  },
-  profileRowLast: {
-    borderBottomWidth: 0,
-  },
-  profileLabel: {
-    fontSize: 14,
-    color: '#a1a1aa',
-  },
-  profileValue: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#fff',
-  },
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 16,
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.3)',
-    borderRadius: 8,
-  },
-  logoutButtonText: {
-    fontSize: 16,
-    fontWeight: '500',
-    color: '#f87171',
-    marginLeft: 12,
-  },
-  supportContainer: {
-    padding: 24,
-  },
-  supportTitle: {
-    fontSize: 18,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 8,
-  },
-  supportCard: {
-    backgroundColor: '#27272a',
-    borderWidth: 1,
-    borderColor: '#3f3f46',
-    borderRadius: 8,
-    padding: 16,
-  },
-  supportText: {
-    fontSize: 14,
-    color: '#e4e4e7',
   },
   // Device Modal Styles
   deviceModalContent: {
