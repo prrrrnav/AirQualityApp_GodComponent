@@ -1,6 +1,6 @@
-// App.tsx
+// App.tsx - COMPLETE VERSION WITH ALL STYLES
+
 import { AuthProvider, useAuth } from './src/context/AuthContext';
-console.log('[APP] App.tsx file executing'); // <-- ADD THIS
 import { LoginScreen } from './src/screens/LoginScreen';
 import React, { useEffect, useRef, useState } from 'react';
 import { Buffer } from 'buffer';
@@ -20,8 +20,9 @@ import {
   PermissionsAndroid,
   Alert,
   FlatList,
+  ActivityIndicator,
 } from 'react-native';
-import { BleManager } from 'react-native-ble-plx';
+import { BleManager, State } from 'react-native-ble-plx';
 import RNBluetoothClassic from 'react-native-bluetooth-classic';
 
 // Import our new screens
@@ -34,29 +35,22 @@ import { SupportScreen } from './src/screens/SupportScreen';
 import { Icon } from './src/components/Icon';
 import { Reading } from './src/utils';
 
-// Initialize BLE Manager
-const bleManager = new BleManager();
-
 // BLE Service and Characteristic UUIDs
 const SERVICE_UUID = '0000FFE0-0000-1000-8000-00805F9B34FB';
 const CHARACTERISTIC_UUID = '0000FFE1-0000-1000-8000-00805F9B34FB';
 
 function MainApp() {
-  const { logout } = useAuth(); // Get the logout function
+  const { logout } = useAuth();
   const [activeTab, setActiveTab] = useState<string>('live');
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
-  const [btStatus, setBtStatus] = useState<
-    'connected' | 'connecting' | 'disconnected'
-  >('disconnected');
+  const [btStatus, setBtStatus] = useState<'connected' | 'connecting' | 'disconnected'>('disconnected');
   const [readings, setReadings] = useState<Reading[]>([]);
-
-  // REMOVED: startDate, endDate, filtered state (moved to AqiReportScreen)
-
   const [deviceModalVisible, setDeviceModalVisible] = useState<boolean>(false);
   const [devices, setDevices] = useState<any[]>([]);
   const [scanning, setScanning] = useState<boolean>(false);
   const [connectedDevice, setConnectedDevice] = useState<any>(null);
   const [lastDataTime, setLastDataTime] = useState<Date | null>(null);
+  const [bleState, setBleState] = useState<State>(State.Unknown);
 
   const scrollViewRef = useRef<ScrollView>(null);
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -64,34 +58,127 @@ function MainApp() {
   const classicReadInterval = useRef<any>(null);
   const dataCheckInterval = useRef<any>(null);
   const connectedDeviceType = useRef<'BLE' | 'Classic' | null>(null);
+  const bleManagerRef = useRef<BleManager | null>(null);
+  const stateSubscriptionRef = useRef<any>(null);
 
-  // Request permissions
+  // Initialize Bluetooth and request permissions
   useEffect(() => {
-    requestPermissions();
+    const initBluetooth = async () => {
+      try {
+        console.log('[BLE] Initializing Bluetooth...');
+        
+        // Request permissions first
+        await requestPermissions();
+
+        // Initialize BLE Manager only once
+        if (!bleManagerRef.current) {
+          bleManagerRef.current = new BleManager();
+          console.log('[BLE] BLE Manager created');
+        }
+
+        // Subscribe to BLE state changes
+        stateSubscriptionRef.current = bleManagerRef.current.onStateChange((state) => {
+          console.log('[BLE] State changed:', state);
+          setBleState(state);
+
+          if (state === State.PoweredOff) {
+            Alert.alert(
+              'Bluetooth is Off',
+              'Please turn on Bluetooth to connect to your device',
+              [
+                {
+                  text: 'Enable Bluetooth',
+                  onPress: () => {
+                    if (Platform.OS === 'android') {
+                      bleManagerRef.current?.enable().catch((error) => {
+                        console.log('[BLE] Failed to enable Bluetooth:', error);
+                      });
+                    }
+                  },
+                },
+                {
+                  text: 'Cancel',
+                  style: 'cancel',
+                },
+              ]
+            );
+          }
+        }, true);
+
+        console.log('[BLE] Initialization complete');
+      } catch (error) {
+        console.error('[BLE] Initialization error:', error);
+      }
+    };
+
+    initBluetooth();
+
+    // Cleanup
     return () => {
+      console.log('[BLE] Cleaning up...');
+      
       if (bleSubscription.current) {
         bleSubscription.current.remove();
+        bleSubscription.current = null;
       }
       if (classicReadInterval.current) {
         clearInterval(classicReadInterval.current);
+        classicReadInterval.current = null;
       }
       if (dataCheckInterval.current) {
         clearInterval(dataCheckInterval.current);
+        dataCheckInterval.current = null;
       }
-      bleManager.destroy();
+      if (stateSubscriptionRef.current) {
+        stateSubscriptionRef.current.remove();
+        stateSubscriptionRef.current = null;
+      }
     };
   }, []);
 
   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
       try {
-        await PermissionsAndroid.requestMultiple([
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        ]);
+        const apiLevel = Platform.Version;
+        console.log('[Permissions] Android API Level:', apiLevel);
+
+        if (apiLevel >= 31) {
+          // Android 12+ (API 31+)
+          const granted = await PermissionsAndroid.requestMultiple([
+            PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+            PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          ]);
+
+          const allGranted = Object.values(granted).every(
+            (status) => status === PermissionsAndroid.RESULTS.GRANTED
+          );
+
+          if (!allGranted) {
+            Alert.alert(
+              'Permissions Required',
+              'Bluetooth and Location permissions are required to scan for devices'
+            );
+          } else {
+            console.log('[Permissions] All permissions granted');
+          }
+        } else {
+          // Android 11 and below
+          const granted = await PermissionsAndroid.requestMultiple([
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          ]);
+
+          if (granted[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] !== PermissionsAndroid.RESULTS.GRANTED) {
+            Alert.alert(
+              'Permission Required',
+              'Location permission is required to scan for Bluetooth devices'
+            );
+          } else {
+            console.log('[Permissions] Location permission granted');
+          }
+        }
       } catch (err) {
-        console.warn(err);
+        console.error('[Permissions] Error:', err);
       }
     }
   };
@@ -111,10 +198,10 @@ function MainApp() {
             duration: 1000,
             useNativeDriver: true,
           }),
-        ]),
+        ])
       ).start();
     }
-  }, [btStatus]);
+  }, [btStatus, pulseAnim]);
 
   // Auto-scroll
   useEffect(() => {
@@ -125,22 +212,19 @@ function MainApp() {
     }
   }, [readings]);
 
-  // REMOVED: Filter effect (moved to AqiReportScreen)
-
   // Data check interval
   useEffect(() => {
     if (btStatus === 'connected') {
       dataCheckInterval.current = setInterval(() => {
         if (lastDataTime) {
           const now = new Date();
-          const timeSinceLastData =
-            (now.getTime() - lastDataTime.getTime()) / 1000;
+          const timeSinceLastData = (now.getTime() - lastDataTime.getTime()) / 1000;
 
           if (timeSinceLastData > 15) {
             Alert.alert(
               'No Data Received',
               'No data received from device in the last 15 seconds. Connection may be lost.',
-              [{ text: 'OK' }],
+              [{ text: 'OK' }]
             );
           }
         }
@@ -160,62 +244,114 @@ function MainApp() {
   }, [btStatus, lastDataTime]);
 
   const scanForDevices = async () => {
+    if (!bleManagerRef.current) {
+      Alert.alert('Error', 'Bluetooth not initialized');
+      return;
+    }
+
+    // Check if Bluetooth is powered on
+    if (bleState !== State.PoweredOn) {
+      Alert.alert(
+        'Bluetooth Unavailable',
+        'Please turn on Bluetooth and try again',
+        [
+          {
+            text: 'Enable Bluetooth',
+            onPress: () => {
+              if (Platform.OS === 'android') {
+                bleManagerRef.current?.enable().catch((error) => {
+                  console.log('[BLE] Failed to enable Bluetooth:', error);
+                });
+              }
+            },
+          },
+          {
+            text: 'Cancel',
+            style: 'cancel',
+          },
+        ]
+      );
+      return;
+    }
+
+    console.log('[BLE] Starting device scan...');
     setScanning(true);
     setDevices([]);
     const foundDevices = new Map();
 
-    // Scan for BLE devices
-    bleManager.startDeviceScan(null, null, (error, device) => {
-      if (error) {
-        console.log('BLE Scan Error:', error);
-        return;
-      }
-      if (device && device.name && !foundDevices.has(device.id)) {
-        foundDevices.set(device.id, {
-          id: device.id,
-          name: device.name,
-          type: 'BLE',
-          rawDevice: device,
-        });
-        setDevices(Array.from(foundDevices.values()));
-      }
-    });
-
-    // Scan for Classic Bluetooth devices
     try {
-      const paired = await RNBluetoothClassic.getBondedDevices();
-      paired.forEach((device) => {
-        if (!foundDevices.has(device.address)) {
-          foundDevices.set(device.address, {
-            id: device.address,
-            name: device.name || 'Unknown Device',
-            type: 'Classic',
+      // Scan for BLE devices
+      bleManagerRef.current.startDeviceScan(null, null, (error, device) => {
+        if (error) {
+          console.log('[BLE] Scan Error:', error.message);
+          if (error.errorCode === 102) {
+            Alert.alert('Bluetooth Error', 'Please enable Bluetooth');
+          }
+          return;
+        }
+        if (device && device.name && !foundDevices.has(device.id)) {
+          console.log('[BLE] Found device:', device.name, device.id);
+          foundDevices.set(device.id, {
+            id: device.id,
+            name: device.name,
+            type: 'BLE',
             rawDevice: device,
           });
+          setDevices(Array.from(foundDevices.values()));
         }
       });
-      setDevices(Array.from(foundDevices.values()));
+
+      // Scan for Classic Bluetooth devices
+      try {
+        const paired = await RNBluetoothClassic.getBondedDevices();
+        console.log('[Classic BT] Found', paired.length, 'paired devices');
+        paired.forEach((device) => {
+          if (!foundDevices.has(device.address)) {
+            foundDevices.set(device.address, {
+              id: device.address,
+              name: device.name || 'Unknown Device',
+              type: 'Classic',
+              rawDevice: device,
+            });
+          }
+        });
+        setDevices(Array.from(foundDevices.values()));
+      } catch (error) {
+        console.log('[Classic BT] Error:', error);
+      }
     } catch (error) {
-      console.log('Classic Bluetooth Error:', error);
+      console.log('[Scan] Error:', error);
+      Alert.alert('Scan Failed', 'Could not scan for devices');
     }
 
+    // Stop scanning after 10 seconds
     setTimeout(() => {
-      bleManager.stopDeviceScan();
+      if (bleManagerRef.current) {
+        bleManagerRef.current.stopDeviceScan();
+        console.log('[BLE] Scan stopped');
+      }
       setScanning(false);
     }, 10000);
   };
 
   const connectToDevice = async (deviceInfo: any) => {
+    if (!bleManagerRef.current) {
+      Alert.alert('Error', 'Bluetooth not initialized');
+      return;
+    }
+
     try {
+      console.log('[Connect] Connecting to:', deviceInfo.name, deviceInfo.type);
       setBtStatus('connecting');
-      bleManager.stopDeviceScan();
+      bleManagerRef.current.stopDeviceScan();
 
       if (deviceInfo.type === 'BLE') {
         // Connect to BLE device
-        const device = await bleManager.connectToDevice(
-          deviceInfo.rawDevice.id,
-        );
+        const device = await bleManagerRef.current.connectToDevice(deviceInfo.rawDevice.id);
+        console.log('[BLE] Connected to device');
+        
         await device.discoverAllServicesAndCharacteristics();
+        console.log('[BLE] Services discovered');
 
         setConnectedDevice(device);
         connectedDeviceType.current = 'BLE';
@@ -228,26 +364,22 @@ function MainApp() {
           CHARACTERISTIC_UUID,
           (error, characteristic) => {
             if (error) {
-              console.log('Monitor Error:', error);
+              console.log('[BLE] Monitor Error:', error.message);
               return;
             }
             if (characteristic?.value) {
-              const rawData = Buffer.from(
-                characteristic.value,
-                'base64',
-              ).toString('utf-8');
+              const rawData = Buffer.from(characteristic.value, 'base64').toString('utf-8');
               parseData(rawData);
               setLastDataTime(new Date());
             }
-          },
+          }
         );
 
         Alert.alert('Success', `Connected to ${deviceInfo.name} (BLE)`);
       } else {
         // Connect to Classic Bluetooth device
-        const device = await RNBluetoothClassic.connectToDevice(
-          deviceInfo.rawDevice.address,
-        );
+        const device = await RNBluetoothClassic.connectToDevice(deviceInfo.rawDevice.address);
+        console.log('[Classic BT] Connected to device');
 
         setConnectedDevice(device);
         connectedDeviceType.current = 'Classic';
@@ -265,22 +397,30 @@ function MainApp() {
               setLastDataTime(new Date());
             }
           } catch (error) {
-            console.log('Read Error:', error);
+            console.log('[Classic BT] Read Error:', error);
           }
         }, 1000);
 
         Alert.alert('Success', `Connected to ${deviceInfo.name} (Classic)`);
       }
     } catch (error: any) {
-      console.error('Connection error:', error);
+      console.error('[Connect] Error:', error);
       setBtStatus('disconnected');
-      Alert.alert('Connection Failed', error.message);
+
+      let errorMessage = 'Could not connect to device';
+      if (error.message) {
+        errorMessage = error.message;
+      }
+
+      Alert.alert('Connection Failed', errorMessage);
     }
   };
 
   const disconnectDevice = async () => {
     if (connectedDevice) {
       try {
+        console.log('[Disconnect] Disconnecting...');
+        
         if (bleSubscription.current) {
           bleSubscription.current.remove();
           bleSubscription.current = null;
@@ -304,9 +444,11 @@ function MainApp() {
         connectedDeviceType.current = null;
         setBtStatus('disconnected');
         setLastDataTime(null);
+        
+        console.log('[Disconnect] Disconnected successfully');
         Alert.alert('Disconnected', 'Device disconnected successfully');
       } catch (error) {
-        console.error('Disconnect error:', error);
+        console.error('[Disconnect] Error:', error);
       }
     }
   };
@@ -315,6 +457,7 @@ function MainApp() {
     const match = rawData.match(/PM2\.5\(ATM\):\s*([\d.]+)\s*ug\/m3/);
     if (match) {
       const val = parseFloat(match[1]);
+      console.log('[Data] Received PM2.5:', val);
       setReadings((prev) => {
         const next = [...prev, { ts: new Date(), value: val }];
         return next.length > 500 ? next.slice(-500) : next;
@@ -324,17 +467,15 @@ function MainApp() {
 
   const openDeviceModal = () => {
     if (btStatus === 'connected') {
-      // If connected, show disconnect option
       Alert.alert(
         'Bluetooth Connected',
         'Do you want to disconnect from the current device?',
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Disconnect', onPress: disconnectDevice, style: 'destructive' },
-        ],
+        ]
       );
     } else {
-      // If not connected, show device list
       setDeviceModalVisible(true);
       scanForDevices();
     }
@@ -344,33 +485,11 @@ function MainApp() {
   const isConnected = btStatus === 'connected';
 
   const btBadge = {
-    text:
-      btStatus === 'connected'
-        ? 'Connected'
-        : btStatus === 'connecting'
-        ? 'Connecting'
-        : 'Disconnected',
-    color:
-      btStatus === 'connected'
-        ? '#22c55e'
-        : btStatus === 'connecting'
-        ? '#eab308'
-        : '#ef4444',
-    dotColor:
-      btStatus === 'connected'
-        ? '#4ade80'
-        : btStatus === 'connecting'
-        ? '#facc15'
-        : '#71717a',
-    liveText:
-      btStatus === 'connected'
-        ? 'Receiving'
-        : btStatus === 'connecting'
-        ? 'Connecting...'
-        : 'Idle',
+    text: btStatus === 'connected' ? 'Connected' : btStatus === 'connecting' ? 'Connecting' : 'Disconnected',
+    color: btStatus === 'connected' ? '#22c55e' : btStatus === 'connecting' ? '#eab308' : '#ef4444',
+    dotColor: btStatus === 'connected' ? '#4ade80' : btStatus === 'connecting' ? '#facc15' : '#71717a',
+    liveText: btStatus === 'connected' ? 'Receiving' : btStatus === 'connecting' ? 'Connecting...' : 'Idle',
   };
-
-  // REMOVED: applyFilter, clearFilter (moved to AqiReportScreen)
 
   return (
     <SafeAreaView style={styles.container}>
@@ -378,9 +497,7 @@ function MainApp() {
 
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => setMenuOpen(true)}
-          style={styles.headerButton}>
+        <TouchableOpacity onPress={() => setMenuOpen(true)} style={styles.headerButton}>
           <Icon name="menu" size={24} color="#a1a1aa" />
         </TouchableOpacity>
 
@@ -389,16 +506,8 @@ function MainApp() {
         </TouchableOpacity>
 
         <TouchableOpacity onPress={openDeviceModal} style={styles.btButton}>
-          <View
-            style={[
-              styles.btCircle,
-              { backgroundColor: isConnected ? '#27272a' : '#3f3f46' },
-            ]}>
-            <Icon
-              name="bluetooth"
-              size={20}
-              color={btStatus === 'connected' ? '#3b82f6' : '#a1a1aa'}
-            />
+          <View style={[styles.btCircle, { backgroundColor: isConnected ? '#27272a' : '#3f3f46' }]}>
+            <Icon name="bluetooth" size={20} color={btStatus === 'connected' ? '#3b82f6' : '#a1a1aa'} />
           </View>
           <View style={[styles.btBadge, { backgroundColor: btBadge.color }]}>
             <Text style={styles.btBadgeText}>{btBadge.text}</Text>
@@ -412,29 +521,15 @@ function MainApp() {
           <TouchableOpacity
             onPress={() => setActiveTab('live')}
             style={[styles.tab, activeTab === 'live' && styles.tabActive]}>
-            <Icon
-              name="activity"
-              size={16}
-              color={activeTab === 'live' ? '#18181b' : '#d4d4d8'}
-            />
-            <Text
-              style={[styles.tabText, activeTab === 'live' && styles.tabTextActive]}>
-              Live PM2.5
-            </Text>
+            <Icon name="activity" size={16} color={activeTab === 'live' ? '#18181b' : '#d4d4d8'} />
+            <Text style={[styles.tabText, activeTab === 'live' && styles.tabTextActive]}>Live PM2.5</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
             onPress={() => setActiveTab('aqi')}
             style={[styles.tab, activeTab === 'aqi' && styles.tabActive]}>
-            <Icon
-              name="wind"
-              size={16}
-              color={activeTab === 'aqi' ? '#18181b' : '#d4d4d8'}
-            />
-            <Text
-              style={[styles.tabText, activeTab === 'aqi' && styles.tabTextActive]}>
-              AQI Report
-            </Text>
+            <Icon name="wind" size={16} color={activeTab === 'aqi' ? '#18181b' : '#d4d4d8'} />
+            <Text style={[styles.tabText, activeTab === 'aqi' && styles.tabTextActive]}>AQI Report</Text>
           </TouchableOpacity>
         </View>
       </View>
@@ -442,11 +537,7 @@ function MainApp() {
       {/* Menu Modal */}
       <Modal visible={menuOpen} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <TouchableOpacity
-            style={styles.modalBackdrop}
-            activeOpacity={1}
-            onPress={() => setMenuOpen(false)}
-          />
+          <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setMenuOpen(false)} />
           <View style={styles.menu}>
             <View style={styles.menuHeader}>
               <View>
@@ -469,16 +560,12 @@ function MainApp() {
                 <Text style={styles.menuItemText}>Profile</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => Linking.openURL('https://shudhvayu.com/about')}>
+              <TouchableOpacity style={styles.menuItem} onPress={() => Linking.openURL('https://shudhvayu.com/about')}>
                 <Icon name="info" size={20} color="#d4d4d8" />
                 <Text style={styles.menuItemText}>About Us</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => Linking.openURL('https://shudhvayu.com/privacy')}>
+              <TouchableOpacity style={styles.menuItem} onPress={() => Linking.openURL('https://shudhvayu.com/privacy')}>
                 <Icon name="shield" size={20} color="#d4d4d8" />
                 <Text style={styles.menuItemText}>Privacy & Security</Text>
               </TouchableOpacity>
@@ -493,16 +580,12 @@ function MainApp() {
                 <Text style={styles.menuItemText}>Support</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => Linking.openURL('https://shudhvayu.com/terms')}>
+              <TouchableOpacity style={styles.menuItem} onPress={() => Linking.openURL('https://shudhvayu.com/terms')}>
                 <Icon name="info" size={20} color="#d4d4d8" />
                 <Text style={styles.menuItemText}>Terms of Services</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity
-                style={[styles.menuItem, styles.logoutItem]}
-                onPress={logout}>
+              <TouchableOpacity style={[styles.menuItem, styles.logoutItem]} onPress={logout}>
                 <Icon name="logout" size={20} color="#f87171" />
                 <Text style={styles.logoutText}>Logout</Text>
               </TouchableOpacity>
@@ -519,19 +602,18 @@ function MainApp() {
 
             <View style={styles.deviceListContainer}>
               {scanning ? (
-                <Text style={styles.scanningText}>Scanning for devices...</Text>
+                <View style={styles.scanningContainer}>
+                  <ActivityIndicator size="large" color="#3b82f6" />
+                  <Text style={styles.scanningText}>Scanning for devices...</Text>
+                </View>
               ) : devices.length === 0 ? (
-                <Text style={styles.noDevicesText}>
-                  No devices found. Tap Refresh to scan again.
-                </Text>
+                <Text style={styles.noDevicesText}>No devices found. Tap Refresh to scan again.</Text>
               ) : (
                 <FlatList
                   data={devices}
                   keyExtractor={(item) => item.id}
                   renderItem={({ item }) => (
-                    <TouchableOpacity
-                      style={styles.deviceItem}
-                      onPress={() => connectToDevice(item)}>
+                    <TouchableOpacity style={styles.deviceItem} onPress={() => connectToDevice(item)}>
                       <View style={styles.deviceInfo}>
                         <Text style={styles.deviceName}>{item.name}</Text>
                         <Text style={styles.deviceId}>{item.id}</Text>
@@ -545,19 +627,16 @@ function MainApp() {
               )}
             </View>
 
-            <TouchableOpacity
-              style={styles.refreshBtn}
-              onPress={scanForDevices}
-              disabled={scanning}>
-              <Text style={styles.refreshBtnText}>
-                {scanning ? 'Scanning...' : '🔄 Refresh'}
-              </Text>
+            <TouchableOpacity style={styles.refreshBtn} onPress={scanForDevices} disabled={scanning}>
+              <Text style={styles.refreshBtnText}>{scanning ? 'Scanning...' : '🔄 Refresh'}</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               style={styles.closeBtn}
               onPress={() => {
-                bleManager.stopDeviceScan();
+                if (bleManagerRef.current) {
+                  bleManagerRef.current.stopDeviceScan();
+                }
                 setDeviceModalVisible(false);
               }}>
               <Text style={styles.closeBtnText}>Close</Text>
@@ -568,11 +647,7 @@ function MainApp() {
 
       {/* Content */}
       <ScrollView style={styles.content}>
-        {/*
-          ALL THE UI LOGIC IS NOW GONE.
-          We replace it with our new screen components.
-        */}
-        {activeTab === 'live' && 
+        {activeTab === 'live' && (
           <LiveFeedScreen
             btStatus={btStatus}
             readings={readings}
@@ -582,7 +657,7 @@ function MainApp() {
             pulseAnim={pulseAnim}
             scrollViewRef={scrollViewRef}
           />
-        }
+        )}
 
         {activeTab === 'aqi' && <AqiReportScreen readings={readings} />}
 
@@ -594,9 +669,8 @@ function MainApp() {
   );
 }
 
-// These are the root components that handle auth
+// Root components that handle auth
 export default function App() {
-  console.log('[APP] App component rendering');
   return (
     <AuthProvider>
       <AppContent />
@@ -605,22 +679,40 @@ export default function App() {
 }
 
 function AppContent() {
-  console.log('[APP] AppContent rendering');
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#3b82f6" />
+        <Text style={styles.loadingText}>Loading...</Text>
+      </View>
+    );
+  }
 
   if (!isAuthenticated) {
     return <LoginScreen />;
   }
-  console.log('[APP] Rendering MainApp');
+
   return <MainApp />;
 }
 
-// STYLES: These are only the styles needed by MainApp.
-// All screen-specific styles have been moved to their own files.
+// COMPLETE STYLES
 const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#18181b',
+  },
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#18181b',
+  },
+  loadingText: {
+    color: '#fff',
+    marginTop: 16,
+    fontSize: 16,
   },
   header: {
     flexDirection: 'row',
@@ -786,11 +878,15 @@ const styles = StyleSheet.create({
     maxHeight: 300,
     marginBottom: 16,
   },
+  scanningContainer: {
+    alignItems: 'center',
+    padding: 20,
+  },
   scanningText: {
     textAlign: 'center',
     fontSize: 14,
     color: '#a1a1aa',
-    padding: 20,
+    marginTop: 12,
   },
   noDevicesText: {
     textAlign: 'center',
