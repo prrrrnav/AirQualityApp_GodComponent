@@ -1,6 +1,6 @@
 // src/services/api.ts
 
-const API_BASE_URL = 'http://10.0.2.2:5000'; // Your backend URL
+const API_BASE_URL = 'http://air.shudhvayu.com'; // Your VPS
 
 export interface SignupData {
   name: string;
