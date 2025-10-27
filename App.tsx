@@ -66,7 +66,7 @@ function MainApp() {
     const initBluetooth = async () => {
       try {
         console.log('[BLE] Initializing Bluetooth...');
-        
+
         // Request permissions first
         await requestPermissions();
 
@@ -116,7 +116,7 @@ function MainApp() {
     // Cleanup
     return () => {
       console.log('[BLE] Cleaning up...');
-      
+
       if (bleSubscription.current) {
         bleSubscription.current.remove();
         bleSubscription.current = null;
@@ -349,7 +349,7 @@ function MainApp() {
         // Connect to BLE device
         const device = await bleManagerRef.current.connectToDevice(deviceInfo.rawDevice.id);
         console.log('[BLE] Connected to device');
-        
+
         await device.discoverAllServicesAndCharacteristics();
         console.log('[BLE] Services discovered');
 
@@ -420,7 +420,7 @@ function MainApp() {
     if (connectedDevice) {
       try {
         console.log('[Disconnect] Disconnecting...');
-        
+
         if (bleSubscription.current) {
           bleSubscription.current.remove();
           bleSubscription.current = null;
@@ -444,7 +444,7 @@ function MainApp() {
         connectedDeviceType.current = null;
         setBtStatus('disconnected');
         setLastDataTime(null);
-        
+
         console.log('[Disconnect] Disconnected successfully');
         Alert.alert('Disconnected', 'Device disconnected successfully');
       } catch (error) {
@@ -486,8 +486,12 @@ function MainApp() {
 
   const btBadge = {
     text: btStatus === 'connected' ? 'Connected' : btStatus === 'connecting' ? 'Connecting' : 'Disconnected',
-    color: btStatus === 'connected' ? '#22c55e' : btStatus === 'connecting' ? '#eab308' : '#ef4444',
-    dotColor: btStatus === 'connected' ? '#4ade80' : btStatus === 'connecting' ? '#facc15' : '#71717a',
+    // Updated colors for the button background
+    bgColor: btStatus === 'connected' ? '#22c55e' : btStatus === 'connecting' ? '#3b82f6' : '#ef4444',
+    // Icon color
+    iconColor: btStatus === 'connected' ? '#22c55e' : btStatus === 'connecting' ? '#3b82f6' : '#ef4444',
+    // Status dot color (keep this for other uses)
+    dotColor: btStatus === 'connected' ? '#4ade80' : btStatus === 'connecting' ? '#60a5fa' : '#f87171',
     liveText: btStatus === 'connected' ? 'Receiving' : btStatus === 'connecting' ? 'Connecting...' : 'Idle',
   };
 
@@ -495,9 +499,13 @@ function MainApp() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#18181b" />
 
+      // In the return statement of MainApp, replace the header section:
+
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={() => setMenuOpen(true)} style={styles.headerButton}>
+        <TouchableOpacity
+          onPress={() => setMenuOpen(true)}
+          style={styles.headerButton}>
           <Icon name="menu" size={24} color="#a1a1aa" />
         </TouchableOpacity>
 
@@ -505,12 +513,30 @@ function MainApp() {
           <Text style={styles.headerTitle}>Shudhvayu</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={openDeviceModal} style={styles.btButton}>
-          <View style={[styles.btCircle, { backgroundColor: isConnected ? '#27272a' : '#3f3f46' }]}>
-            <Icon name="bluetooth" size={20} color={btStatus === 'connected' ? '#3b82f6' : '#a1a1aa'} />
-          </View>
-          <View style={[styles.btBadge, { backgroundColor: btBadge.color }]}>
-            <Text style={styles.btBadgeText}>{btBadge.text}</Text>
+        {/* UPDATED BLUETOOTH BUTTON */}
+        <TouchableOpacity onPress={openDeviceModal} style={styles.btButtonContainer}>
+          <View
+            style={[
+              styles.btIconCircle,
+              {
+                backgroundColor: btStatus === 'connected'
+                  ? 'rgba(34, 197, 94, 0.2)'  // Green background
+                  : btStatus === 'connecting'
+                    ? 'rgba(59, 130, 246, 0.2)'  // Blue background
+                    : 'rgba(239, 68, 68, 0.2)'    // Red background
+              },
+            ]}>
+            <Icon
+              name="bluetooth"
+              size={24}
+              color={
+                btStatus === 'connected'
+                  ? '#22c55e'  // Green icon
+                  : btStatus === 'connecting'
+                    ? '#3b82f6'  // Blue icon
+                    : '#ef4444'   // Red icon
+              }
+            />
           </View>
         </TouchableOpacity>
       </View>
@@ -730,6 +756,18 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#fff',
+  },
+  btButtonContainer: {
+    padding: 4,
+  },
+  btIconCircle: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: 'transparent',
   },
   btButton: {
     position: 'relative',
