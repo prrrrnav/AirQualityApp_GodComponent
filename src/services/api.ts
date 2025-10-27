@@ -1,15 +1,6 @@
 // src/services/api.ts
 
-// IMPORTANT: Update this URL based on where your backend is running
-// For local development on physical device, use your computer's IP address
-// For Android emulator, use 10.0.2.2
-const API_BASE_URL = 'http://10.0.2.2:5000'; // Change 5000 to your PORT if different
-
-// If testing on a physical device, use your computer's local IP:
-// const API_BASE_URL = 'http://192.168.1.XXX:5000'; // Replace XXX with your IP
-
-// For production:
-// const API_BASE_URL = 'https://your-deployed-backend.com';
+const API_BASE_URL = 'http://10.0.2.2:5000'; // Your backend URL
 
 export interface SignupData {
   name: string;
@@ -42,10 +33,13 @@ class ApiService {
   }
 
   // Authentication endpoints
+  // src/services/api.ts - Update the signup function
+
   async signup(data: SignupData): Promise<AuthResponse> {
     try {
       console.log('[API] Signup request to:', `${this.baseUrl}/api/v1/auth/signup`);
-      
+      console.log('[API] Signup data:', { ...data, password: '***' });
+
       const response = await fetch(`${this.baseUrl}/api/v1/auth/signup`, {
         method: 'POST',
         headers: {
@@ -55,33 +49,47 @@ class ApiService {
       });
 
       const result = await response.json();
-      console.log('[API] Signup response:', result);
-      
+      console.log('[API] Signup response:', JSON.stringify(result, null, 2));
+
       if (!response.ok) {
-        throw new Error(result.message || result.error || 'Signup failed');
+        // Extract error message from backend
+        const errorMessage = result.error || result.message || 'Signup failed';
+        throw new Error(errorMessage);
       }
 
-      // Transform backend response to match our interface
+      // Check if we have a token
+      if (!result.token) {
+        throw new Error('No token received from server');
+      }
+
+      // Parse the response
+      const userData = result.data || result.user || {};
+
+      const user = {
+        id: userData._id || userData.id || 'unknown',
+        name: userData.name || data.name,
+        email: userData.email || data.email,
+      };
+
+      console.log('[API] Parsed user:', user);
+
       return {
-        success: result.success,
+        success: result.success || response.ok,
         token: result.token,
-        user: result.data ? {
-          id: result.data._id || result.data.id,
-          name: result.data.name,
-          email: result.data.email,
-        } : undefined,
+        user: user,
         message: result.message,
       };
     } catch (error: any) {
       console.error('[API] Signup error:', error);
-      throw new Error(error.message || 'Network error during signup');
+      throw error; // Re-throw the error so LoginScreen can handle it
     }
   }
 
   async login(data: LoginData): Promise<AuthResponse> {
     try {
       console.log('[API] Login request to:', `${this.baseUrl}/api/v1/auth/login`);
-      
+      console.log('[API] Login data:', { email: data.email, password: '***' });
+
       const response = await fetch(`${this.baseUrl}/api/v1/auth/login`, {
         method: 'POST',
         headers: {
@@ -91,21 +99,34 @@ class ApiService {
       });
 
       const result = await response.json();
-      console.log('[API] Login response:', result);
-      
+      console.log('[API] Login response:', JSON.stringify(result, null, 2));
+
       if (!response.ok) {
         throw new Error(result.message || result.error || 'Login failed');
       }
 
-      // Transform backend response to match our interface
+      // Check if we have a token
+      if (!result.token) {
+        throw new Error('No token received from server');
+      }
+
+      // Parse the response - your backend might return user data differently
+      // The user data could be in result.data, result.user, or directly in result
+      const userData = result.data || result.user || {};
+
+      // If no user data in response, decode from token or use email
+      const user = {
+        id: userData._id || userData.id || 'decoded-from-token',
+        name: userData.name || data.email.split('@')[0],
+        email: userData.email || data.email,
+      };
+
+      console.log('[API] Parsed user:', user);
+
       return {
-        success: result.success,
+        success: result.success || response.ok,
         token: result.token,
-        user: result.data ? {
-          id: result.data._id || result.data.id,
-          name: result.data.name,
-          email: result.data.email,
-        } : undefined,
+        user: user,
         message: result.message,
       };
     } catch (error: any) {
@@ -118,7 +139,7 @@ class ApiService {
   async registerDevice(macId: string, token: string) {
     try {
       console.log('[API] Register device request');
-      
+
       const response = await fetch(`${this.baseUrl}/api/v1/data/devices`, {
         method: 'POST',
         headers: {
@@ -130,7 +151,7 @@ class ApiService {
 
       const result = await response.json();
       console.log('[API] Register device response:', result);
-      
+
       if (!response.ok) {
         throw new Error(result.message || result.error || 'Device registration failed');
       }
@@ -145,7 +166,7 @@ class ApiService {
   async getHistory(deviceId: string, token: string) {
     try {
       console.log('[API] Get history request for device:', deviceId);
-      
+
       const response = await fetch(
         `${this.baseUrl}/api/v1/data/history?deviceId=${deviceId}`,
         {
@@ -157,7 +178,7 @@ class ApiService {
 
       const result = await response.json();
       console.log('[API] Get history response:', result);
-      
+
       if (!response.ok) {
         throw new Error(result.message || result.error || 'Failed to fetch history');
       }
@@ -172,7 +193,7 @@ class ApiService {
   async ingestData(data: any) {
     try {
       console.log('[API] Ingest data request');
-      
+
       const response = await fetch(`${this.baseUrl}/api/v1/data/ingest`, {
         method: 'POST',
         headers: {
@@ -183,7 +204,7 @@ class ApiService {
 
       const result = await response.json();
       console.log('[API] Ingest data response:', result);
-      
+
       if (!response.ok) {
         throw new Error(result.message || result.error || 'Data ingestion failed');
       }

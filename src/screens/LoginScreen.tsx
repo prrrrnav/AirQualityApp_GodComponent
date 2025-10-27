@@ -34,6 +34,31 @@ export const LoginScreen = () => {
     return regex.test(email);
   };
 
+  const getErrorMessage = (error: any): string => {
+    // Extract user-friendly error messages
+    const errorString = error?.message || error?.toString() || 'An error occurred';
+    
+    // Common error patterns
+    if (errorString.includes('Duplicate field value')) {
+      return 'This email is already registered. Please login instead.';
+    }
+    if (errorString.includes('Invalid credentials')) {
+      return 'Invalid email or password. Please try again.';
+    }
+    if (errorString.includes('User not found')) {
+      return 'No account found with this email.';
+    }
+    if (errorString.includes('Network request failed')) {
+      return 'Cannot connect to server. Please check your internet connection.';
+    }
+    if (errorString.includes('timeout')) {
+      return 'Request timed out. Please try again.';
+    }
+    
+    // Return the original error message if no pattern matches
+    return errorString;
+  };
+
   const handleSubmit = async () => {
     // Validation
     if (!email || !email.trim()) {
@@ -72,26 +97,37 @@ export const LoginScreen = () => {
       setLoading(true);
 
       if (mode === 'login') {
-        await login(email, password);
+        await login(email.trim(), password);
+        // Success - user will be redirected automatically
       } else if (mode === 'signup') {
-        await signup(name, email, password);
+        await signup(name.trim(), email.trim(), password);
+        // Success - user will be redirected automatically
       }
     } catch (error: any) {
+      console.error('[LoginScreen] Auth error:', error);
+      
+      const errorMessage = getErrorMessage(error);
+      
       Alert.alert(
         mode === 'login' ? 'Login Failed' : 'Signup Failed',
-        error.message || 'Please try again'
+        errorMessage,
+        [{ text: 'OK' }]
       );
-      console.error('Auth error:', error);
     } finally {
       setLoading(false);
     }
   };
 
   const handleForgotPassword = () => {
+    if (!email || !email.trim() || !validateEmail(email)) {
+      Alert.alert('Error', 'Please enter a valid email address first');
+      return;
+    }
+
     // TODO: Implement forgot password API call when backend endpoint is ready
     Alert.alert(
       'Password Reset',
-      'A password reset link has been sent to your email (Feature coming soon)',
+      `A password reset link will be sent to ${email} (Feature coming soon)`,
       [
         {
           text: 'OK',
@@ -245,7 +281,7 @@ export const LoginScreen = () => {
               onPress={handleSubmit}
               disabled={loading}>
               {loading ? (
-                <ActivityIndicator color="#18181b" />
+                <ActivityIndicator color="#fff" />
               ) : (
                 <Text style={styles.authButtonText}>
                   {mode === 'login'
