@@ -6,10 +6,9 @@ import {
   StyleSheet,
   ScrollView,
   Animated,
-  Platform,
 } from 'react-native';
-import { Icon } from '../components/Icon'; // We'll create this soon
-import { Reading } from '../utils'; // We'll create this soon
+import { Icon } from '../components/Icon';
+import { Reading, fmtDate, fmtTime } from '../utils';
 
 // Define the props this screen will receive
 interface Props {
@@ -54,6 +53,16 @@ export const LiveFeedScreen: React.FC<Props> = ({
             <Text style={styles.statusText}>{btBadge.liveText}</Text>
           </View>
         </View>
+
+        {/* Info banner */}
+        {isConnected && (
+          <View style={styles.infoBanner}>
+            <Icon name="info" size={14} color="#60a5fa" />
+            <Text style={styles.infoBannerText}>
+              Data is being collected in 5-minute intervals. View aggregated data in AQI Report.
+            </Text>
+          </View>
+        )}
       </View>
 
       {/* Live Feed Table */}
@@ -61,6 +70,7 @@ export const LiveFeedScreen: React.FC<Props> = ({
         <View style={styles.tableHeader}>
           <Icon name="activity" size={16} color="#e4e4e7" />
           <Text style={styles.tableHeaderText}>Live Feed - PM2.5</Text>
+          <Text style={styles.tableHeaderCount}>({readings.length} readings)</Text>
         </View>
 
         {btStatus === 'disconnected' ? (
@@ -117,22 +127,7 @@ export const LiveFeedScreen: React.FC<Props> = ({
   );
 };
 
-// Helper functions (moved from App.tsx)
-function fmtDate(d: Date): string {
-  const dd = String(d.getDate()).padStart(2, '0');
-  const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
-}
-
-function fmtTime(d: Date): string {
-  const hh = String(d.getHours()).padStart(2, '0');
-  const mi = String(d.getMinutes()).padStart(2, '0');
-  const ss = String(d.getSeconds()).padStart(2, '0');
-  return `${hh}:${mi}:${ss}`;
-}
-
-// Styles copied from App.tsx
+// Styles
 const styles = StyleSheet.create({
   pageContainer: {
     padding: 16,
@@ -147,6 +142,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 8,
   },
   liveTitle: {
     flexDirection: 'row',
@@ -184,6 +180,21 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: '#d4d4d8',
   },
+  infoBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#1e3a8a',
+    padding: 8,
+    borderRadius: 6,
+    borderWidth: 1,
+    borderColor: '#2563eb',
+  },
+  infoBannerText: {
+    fontSize: 11,
+    color: '#93c5fd',
+    marginLeft: 6,
+    flex: 1,
+  },
   tableContainer: {
     backgroundColor: '#18181b',
     borderWidth: 1,
@@ -204,6 +215,11 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#e4e4e7',
     marginLeft: 8,
+  },
+  tableHeaderCount: {
+    fontSize: 11,
+    color: '#71717a',
+    marginLeft: 4,
   },
   tableScroll: {
     maxHeight: 400,

@@ -1,4 +1,4 @@
-// App.tsx - COMPLETE VERSION WITH ALL STYLES
+// App.tsx - UPDATED VERSION WITH 5-MINUTE BUCKETING
 
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { LoginScreen } from './src/screens/LoginScreen';
@@ -31,16 +31,18 @@ import { AqiReportScreen } from './src/screens/AqiReportScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 import { SupportScreen } from './src/screens/SupportScreen';
 
-// Import our shared components
+// Import our shared components and utilities
 import { Icon } from './src/components/Icon';
-import { Reading } from './src/utils';
+import { Reading, BucketedReading } from './src/utils';
+import { storageService } from './src/services/storage';
+import { apiService } from './src/services/api';
 
 // BLE Service and Characteristic UUIDs
 const SERVICE_UUID = '0000FFE0-0000-1000-8000-00805F9B34FB';
 const CHARACTERISTIC_UUID = '0000FFE1-0000-1000-8000-00805F9B34FB';
 
 function MainApp() {
-  const { logout } = useAuth();
+  const { logout, token } = useAuth(); // ← UPDATED: Added token
   const [activeTab, setActiveTab] = useState<string>('live');
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
   const [btStatus, setBtStatus] = useState<'connected' | 'connecting' | 'disconnected'>('disconnected');
@@ -60,13 +62,19 @@ function MainApp() {
   const connectedDeviceType = useRef<'BLE' | 'Classic' | null>(null);
   const bleManagerRef = useRef<BleManager | null>(null);
   const stateSubscriptionRef = useRef<any>(null);
+  
+  // NEW: Reference for current bucket
+  const currentBucketRef = useRef<{
+    bucketStart: Date;
+    readings: number[];
+  } | null>(null);
 
   // Initialize Bluetooth and request permissions
   useEffect(() => {
     const initBluetooth = async () => {
       try {
         console.log('[BLE] Initializing Bluetooth...');
-
+        
         // Request permissions first
         await requestPermissions();
 
@@ -116,7 +124,7 @@ function MainApp() {
     // Cleanup
     return () => {
       console.log('[BLE] Cleaning up...');
-
+      
       if (bleSubscription.current) {
         bleSubscription.current.remove();
         bleSubscription.current = null;
@@ -349,7 +357,7 @@ function MainApp() {
         // Connect to BLE device
         const device = await bleManagerRef.current.connectToDevice(deviceInfo.rawDevice.id);
         console.log('[BLE] Connected to device');
-
+        
         await device.discoverAllServicesAndCharacteristics();
         console.log('[BLE] Services discovered');
 
@@ -420,7 +428,30 @@ function MainApp() {
     if (connectedDevice) {
       try {
         console.log('[Disconnect] Disconnecting...');
-
+        
+        // NEW: Save any pending bucket before disconnecting
+        if (currentBucketRef.current && currentBucketRef.current.readings.length > 0) {
+          const intervalMs = 5 * 60 * 1000;
+          const prevBucket = currentBucketRef.current;
+          const avgValue = prevBucket.readings.reduce((a, b) => a + b, 0) / prevBucket.readings.length;
+          
+          const bucketedReading: BucketedReading = {
+            bucketStart: prevBucket.bucketStart,
+            bucketEnd: new Date(prevBucket.bucketStart.getTime() + intervalMs),
+            avgValue,
+            minValue: Math.min(...prevBucket.readings),
+            maxValue: Math.max(...prevBucket.readings),
+            count: prevBucket.readings.length,
+            readings: prevBucket.readings,
+          };
+          
+          await storageService.appendReading(bucketedReading);
+          console.log('[Disconnect] Saved pending bucket');
+        }
+        
+        // NEW: Clear the bucket reference
+        currentBucketRef.current = null;
+        
         if (bleSubscription.current) {
           bleSubscription.current.remove();
           bleSubscription.current = null;
@@ -444,7 +475,7 @@ function MainApp() {
         connectedDeviceType.current = null;
         setBtStatus('disconnected');
         setLastDataTime(null);
-
+        
         console.log('[Disconnect] Disconnected successfully');
         Alert.alert('Disconnected', 'Device disconnected successfully');
       } catch (error) {
@@ -453,13 +484,71 @@ function MainApp() {
     }
   };
 
+  // UPDATED: parseData function with 5-minute bucketing
   const parseData = (rawData: string) => {
     const match = rawData.match(/PM2\.5\(ATM\):\s*([\d.]+)\s*ug\/m3/);
     if (match) {
       const val = parseFloat(match[1]);
+      const now = new Date();
       console.log('[Data] Received PM2.5:', val);
+      
+      // Get 5-minute bucket start time
+      const intervalMs = 5 * 60 * 1000; // 5 minutes
+      const bucketTime = Math.floor(now.getTime() / intervalMs) * intervalMs;
+      const bucketStart = new Date(bucketTime);
+      
+      // Check if we need a new bucket
+      if (!currentBucketRef.current || 
+          currentBucketRef.current.bucketStart.getTime() !== bucketTime) {
+        
+        // Save previous bucket if exists
+        if (currentBucketRef.current && currentBucketRef.current.readings.length > 0) {
+          const prevBucket = currentBucketRef.current;
+          const avgValue = prevBucket.readings.reduce((a, b) => a + b, 0) / prevBucket.readings.length;
+          
+          const bucketedReading: BucketedReading = {
+            bucketStart: prevBucket.bucketStart,
+            bucketEnd: new Date(prevBucket.bucketStart.getTime() + intervalMs),
+            avgValue,
+            minValue: Math.min(...prevBucket.readings),
+            maxValue: Math.max(...prevBucket.readings),
+            count: prevBucket.readings.length,
+            readings: prevBucket.readings,
+          };
+          
+          // Save to AsyncStorage
+          storageService.appendReading(bucketedReading).catch(err => 
+            console.error('[Storage] Error saving bucket:', err)
+          );
+          
+          // Optionally sync to backend
+          if (token && connectedDevice) {
+            apiService.ingestData({
+              deviceId: connectedDevice.id,
+              timestamp: bucketedReading.bucketStart.toISOString(),
+              pm25: bucketedReading.avgValue,
+              metadata: {
+                min: bucketedReading.minValue,
+                max: bucketedReading.maxValue,
+                count: bucketedReading.count,
+              },
+            }).catch(err => console.error('[API] Ingest error:', err));
+          }
+        }
+        
+        // Start new bucket
+        currentBucketRef.current = {
+          bucketStart,
+          readings: [val],
+        };
+      } else {
+        // Add to current bucket
+        currentBucketRef.current.readings.push(val);
+      }
+      
+      // Still update live readings for UI
       setReadings((prev) => {
-        const next = [...prev, { ts: new Date(), value: val }];
+        const next = [...prev, { ts: now, value: val }];
         return next.length > 500 ? next.slice(-500) : next;
       });
     }
@@ -486,12 +575,8 @@ function MainApp() {
 
   const btBadge = {
     text: btStatus === 'connected' ? 'Connected' : btStatus === 'connecting' ? 'Connecting' : 'Disconnected',
-    // Updated colors for the button background
-    bgColor: btStatus === 'connected' ? '#22c55e' : btStatus === 'connecting' ? '#3b82f6' : '#ef4444',
-    // Icon color
-    iconColor: btStatus === 'connected' ? '#22c55e' : btStatus === 'connecting' ? '#3b82f6' : '#ef4444',
-    // Status dot color (keep this for other uses)
-    dotColor: btStatus === 'connected' ? '#4ade80' : btStatus === 'connecting' ? '#60a5fa' : '#f87171',
+    color: btStatus === 'connected' ? '#22c55e' : btStatus === 'connecting' ? '#eab308' : '#ef4444',
+    dotColor: btStatus === 'connected' ? '#4ade80' : btStatus === 'connecting' ? '#facc15' : '#71717a',
     liveText: btStatus === 'connected' ? 'Receiving' : btStatus === 'connecting' ? 'Connecting...' : 'Idle',
   };
 
@@ -499,13 +584,9 @@ function MainApp() {
     <SafeAreaView style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#18181b" />
 
-      // In the return statement of MainApp, replace the header section:
-
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity
-          onPress={() => setMenuOpen(true)}
-          style={styles.headerButton}>
+        <TouchableOpacity onPress={() => setMenuOpen(true)} style={styles.headerButton}>
           <Icon name="menu" size={24} color="#a1a1aa" />
         </TouchableOpacity>
 
@@ -768,29 +849,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     borderWidth: 2,
     borderColor: 'transparent',
-  },
-  btButton: {
-    position: 'relative',
-  },
-  btCircle: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  btBadge: {
-    position: 'absolute',
-    bottom: -4,
-    right: -4,
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 12,
-  },
-  btBadgeText: {
-    fontSize: 10,
-    color: '#fff',
-    fontWeight: '600',
   },
   tabContainer: {
     alignItems: 'center',
