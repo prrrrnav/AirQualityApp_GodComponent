@@ -18,7 +18,8 @@ interface Props {
   isConnected: boolean;
   btBadge: { liveText: string; dotColor: string };
   pulseAnim: Animated.Value;
-  scrollViewRef: React.RefObject<ScrollView>;
+  // scrollViewRef: React.RefObject<ScrollView>;
+  connectedDeviceId?: string; // ADD THIS
 }
 
 export const LiveFeedScreen: React.FC<Props> = ({
@@ -28,7 +29,8 @@ export const LiveFeedScreen: React.FC<Props> = ({
   isConnected,
   btBadge,
   pulseAnim,
-  scrollViewRef,
+  // scrollViewRef,
+  connectedDeviceId,
 }) => {
   return (
     <View style={styles.pageContainer}>
@@ -69,7 +71,12 @@ export const LiveFeedScreen: React.FC<Props> = ({
       <View style={styles.tableContainer}>
         <View style={styles.tableHeader}>
           <Icon name="activity" size={16} color="#e4e4e7" />
-          <Text style={styles.tableHeaderText}>Live Feed - PM2.5</Text>
+          <View style={styles.tableHeaderContent}>
+            <Text style={styles.tableHeaderText}>Live Feed - PM2.5</Text>
+            {connectedDeviceId && (
+              <Text style={styles.deviceMacText}>Device: {connectedDeviceId}</Text>
+            )}
+          </View>
           <Text style={styles.tableHeaderCount}>({readings.length} readings)</Text>
         </View>
 
@@ -95,7 +102,7 @@ export const LiveFeedScreen: React.FC<Props> = ({
           </View>
         ) : (
           <ScrollView
-            ref={scrollViewRef}
+            // ref={scrollViewRef}
             style={styles.tableScroll}
             nestedScrollEnabled>
             <View style={styles.tableHeaderRow}>
@@ -137,6 +144,15 @@ const styles = StyleSheet.create({
     paddingBottom: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#27272a',
+  },
+  tableHeaderContent: {
+    flex: 1,
+    marginLeft: 8,
+  },
+  deviceMacText: {
+    fontSize: 10,
+    color: '#a1a1aa',
+    marginTop: 2,
   },
   liveHeaderTop: {
     flexDirection: 'row',

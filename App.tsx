@@ -2,6 +2,7 @@
 
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { LoginScreen } from './src/screens/LoginScreen';
+import BluetoothIcon from './src/components/BluetoothIcon';
 import React, { useEffect, useRef, useState } from 'react';
 import { Buffer } from 'buffer';
 global.Buffer = Buffer;
@@ -62,7 +63,7 @@ function MainApp() {
   const connectedDeviceType = useRef<'BLE' | 'Classic' | null>(null);
   const bleManagerRef = useRef<BleManager | null>(null);
   const stateSubscriptionRef = useRef<any>(null);
-  
+
   // NEW: Reference for current bucket
   const currentBucketRef = useRef<{
     bucketStart: Date;
@@ -74,7 +75,7 @@ function MainApp() {
     const initBluetooth = async () => {
       try {
         console.log('[BLE] Initializing Bluetooth...');
-        
+
         // Request permissions first
         await requestPermissions();
 
@@ -124,7 +125,7 @@ function MainApp() {
     // Cleanup
     return () => {
       console.log('[BLE] Cleaning up...');
-      
+
       if (bleSubscription.current) {
         bleSubscription.current.remove();
         bleSubscription.current = null;
@@ -357,7 +358,7 @@ function MainApp() {
         // Connect to BLE device
         const device = await bleManagerRef.current.connectToDevice(deviceInfo.rawDevice.id);
         console.log('[BLE] Connected to device');
-        
+
         await device.discoverAllServicesAndCharacteristics();
         console.log('[BLE] Services discovered');
 
@@ -428,13 +429,13 @@ function MainApp() {
     if (connectedDevice) {
       try {
         console.log('[Disconnect] Disconnecting...');
-        
+
         // NEW: Save any pending bucket before disconnecting
         if (currentBucketRef.current && currentBucketRef.current.readings.length > 0) {
           const intervalMs = 5 * 60 * 1000;
           const prevBucket = currentBucketRef.current;
           const avgValue = prevBucket.readings.reduce((a, b) => a + b, 0) / prevBucket.readings.length;
-          
+
           const bucketedReading: BucketedReading = {
             bucketStart: prevBucket.bucketStart,
             bucketEnd: new Date(prevBucket.bucketStart.getTime() + intervalMs),
@@ -444,14 +445,14 @@ function MainApp() {
             count: prevBucket.readings.length,
             readings: prevBucket.readings,
           };
-          
+
           await storageService.appendReading(bucketedReading);
           console.log('[Disconnect] Saved pending bucket');
         }
-        
+
         // NEW: Clear the bucket reference
         currentBucketRef.current = null;
-        
+
         if (bleSubscription.current) {
           bleSubscription.current.remove();
           bleSubscription.current = null;
@@ -475,7 +476,7 @@ function MainApp() {
         connectedDeviceType.current = null;
         setBtStatus('disconnected');
         setLastDataTime(null);
-        
+
         console.log('[Disconnect] Disconnected successfully');
         Alert.alert('Disconnected', 'Device disconnected successfully');
       } catch (error) {
@@ -491,21 +492,21 @@ function MainApp() {
       const val = parseFloat(match[1]);
       const now = new Date();
       console.log('[Data] Received PM2.5:', val);
-      
+
       // Get 5-minute bucket start time
       const intervalMs = 5 * 60 * 1000; // 5 minutes
       const bucketTime = Math.floor(now.getTime() / intervalMs) * intervalMs;
       const bucketStart = new Date(bucketTime);
-      
+
       // Check if we need a new bucket
-      if (!currentBucketRef.current || 
-          currentBucketRef.current.bucketStart.getTime() !== bucketTime) {
-        
+      if (!currentBucketRef.current ||
+        currentBucketRef.current.bucketStart.getTime() !== bucketTime) {
+
         // Save previous bucket if exists
         if (currentBucketRef.current && currentBucketRef.current.readings.length > 0) {
           const prevBucket = currentBucketRef.current;
           const avgValue = prevBucket.readings.reduce((a, b) => a + b, 0) / prevBucket.readings.length;
-          
+
           const bucketedReading: BucketedReading = {
             bucketStart: prevBucket.bucketStart,
             bucketEnd: new Date(prevBucket.bucketStart.getTime() + intervalMs),
@@ -515,12 +516,12 @@ function MainApp() {
             count: prevBucket.readings.length,
             readings: prevBucket.readings,
           };
-          
+
           // Save to AsyncStorage
-          storageService.appendReading(bucketedReading).catch(err => 
+          storageService.appendReading(bucketedReading).catch(err =>
             console.error('[Storage] Error saving bucket:', err)
           );
-          
+
           // Optionally sync to backend
           if (token && connectedDevice) {
             apiService.ingestData({
@@ -535,7 +536,7 @@ function MainApp() {
             }).catch(err => console.error('[API] Ingest error:', err));
           }
         }
-        
+
         // Start new bucket
         currentBucketRef.current = {
           bucketStart,
@@ -545,7 +546,7 @@ function MainApp() {
         // Add to current bucket
         currentBucketRef.current.readings.push(val);
       }
-      
+
       // Still update live readings for UI
       setReadings((prev) => {
         const next = [...prev, { ts: now, value: val }];
@@ -594,52 +595,33 @@ function MainApp() {
           <Text style={styles.headerTitle}>Shudhvayu</Text>
         </TouchableOpacity>
 
-        {/* UPDATED BLUETOOTH BUTTON */}
-        <TouchableOpacity onPress={openDeviceModal} style={styles.btButtonContainer}>
-          <View
-            style={[
-              styles.btIconCircle,
-              {
-                backgroundColor: btStatus === 'connected'
-                  ? 'rgba(34, 197, 94, 0.2)'  // Green background
-                  : btStatus === 'connecting'
-                    ? 'rgba(59, 130, 246, 0.2)'  // Blue background
-                    : 'rgba(239, 68, 68, 0.2)'    // Red background
-              },
-            ]}>
-            <Icon
-              name="bluetooth"
-              size={24}
-              color={
-                btStatus === 'connected'
-                  ? '#22c55e'  // Green icon
-                  : btStatus === 'connecting'
-                    ? '#3b82f6'  // Blue icon
-                    : '#ef4444'   // Red icon
-              }
-            />
+        <BluetoothIcon
+          isActive={btStatus === 'connected'}
+          size={40}
+          onPress={openDeviceModal}
+        />
+      </View>
+
+      {/* Tab Selector - Only show for Live and AQI tabs */}
+      {(activeTab === 'live' || activeTab === 'aqi') && (
+        <View style={styles.tabContainer}>
+          <View style={styles.tabInner}>
+            <TouchableOpacity
+              onPress={() => setActiveTab('live')}
+              style={[styles.tab, activeTab === 'live' && styles.tabActive]}>
+              <Icon name="activity" size={16} color={activeTab === 'live' ? '#18181b' : '#d4d4d8'} />
+              <Text style={[styles.tabText, activeTab === 'live' && styles.tabTextActive]}>Live PM2.5</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() => setActiveTab('aqi')}
+              style={[styles.tab, activeTab === 'aqi' && styles.tabActive]}>
+              <Icon name="wind" size={16} color={activeTab === 'aqi' ? '#18181b' : '#d4d4d8'} />
+              <Text style={[styles.tabText, activeTab === 'aqi' && styles.tabTextActive]}>AQI Report</Text>
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
-      </View>
-
-      {/* Tab Selector */}
-      <View style={styles.tabContainer}>
-        <View style={styles.tabInner}>
-          <TouchableOpacity
-            onPress={() => setActiveTab('live')}
-            style={[styles.tab, activeTab === 'live' && styles.tabActive]}>
-            <Icon name="activity" size={16} color={activeTab === 'live' ? '#18181b' : '#d4d4d8'} />
-            <Text style={[styles.tabText, activeTab === 'live' && styles.tabTextActive]}>Live PM2.5</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            onPress={() => setActiveTab('aqi')}
-            style={[styles.tab, activeTab === 'aqi' && styles.tabActive]}>
-            <Icon name="wind" size={16} color={activeTab === 'aqi' ? '#18181b' : '#d4d4d8'} />
-            <Text style={[styles.tabText, activeTab === 'aqi' && styles.tabTextActive]}>AQI Report</Text>
-          </TouchableOpacity>
         </View>
-      </View>
+      )}
 
       {/* Menu Modal */}
       <Modal visible={menuOpen} animationType="slide" transparent>
@@ -762,7 +744,8 @@ function MainApp() {
             isConnected={isConnected}
             btBadge={btBadge}
             pulseAnim={pulseAnim}
-            scrollViewRef={scrollViewRef}
+            // scrollViewRef={scrollViewRef}
+            connectedDeviceId={connectedDevice?.id} // ADD THIS
           />
         )}
 
@@ -837,18 +820,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: 'bold',
     color: '#fff',
-  },
-  btButtonContainer: {
-    padding: 4,
-  },
-  btIconCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: 'transparent',
   },
   tabContainer: {
     alignItems: 'center',
