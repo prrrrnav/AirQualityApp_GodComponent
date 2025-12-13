@@ -734,8 +734,8 @@ function MainApp() {
         </View>
       </Modal>
 
-      {/* Content */}
-      <ScrollView style={styles.content}>
+            {/* Content */}
+            <ScrollView style={styles.content}>
         {activeTab === 'live' && (
           <LiveFeedScreen
             btStatus={btStatus}
@@ -744,16 +744,19 @@ function MainApp() {
             isConnected={isConnected}
             btBadge={btBadge}
             pulseAnim={pulseAnim}
-            // scrollViewRef={scrollViewRef}
-            connectedDeviceId={connectedDevice?.id} // ADD THIS
+            connectedDeviceId={connectedDevice?.id}
           />
         )}
 
         {activeTab === 'aqi' && <AqiReportScreen readings={readings} />}
 
-        {activeTab === 'profile' && <ProfileScreen />}
+        {activeTab === 'profile' && (
+          <ProfileScreen onBackPress={() => setActiveTab('live')} />
+        )}
 
-        {activeTab === 'support' && <SupportScreen />}
+        {activeTab === 'support' && (
+          <SupportScreen onBackPress={() => setActiveTab('live')} />
+        )}
       </ScrollView>
     </SafeAreaView>
   );

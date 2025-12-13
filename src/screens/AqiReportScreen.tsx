@@ -3,13 +3,14 @@ import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
-  TextInput,
   TouchableOpacity,
   ScrollView,
   StyleSheet,
   ActivityIndicator,
   RefreshControl,
+  Platform,
 } from 'react-native';
+import DateTimePicker from '@react-native-community/datetimepicker';
 import { Icon } from '../components/Icon';
 import {
   Reading,
@@ -27,8 +28,10 @@ interface Props {
 
 export const AqiReportScreen: React.FC<Props> = ({ readings }) => {
   // State
-  const [startDate, setStartDate] = useState<string>('');
-  const [endDate, setEndDate] = useState<string>('');
+  const [startDate, setStartDate] = useState<Date | null>(null);
+  const [endDate, setEndDate] = useState<Date | null>(null);
+  const [showStartPicker, setShowStartPicker] = useState(false);
+  const [showEndPicker, setShowEndPicker] = useState(false);
   const [bucketedData, setBucketedData] = useState<BucketedReading[]>([]);
   const [filteredBucketed, setFilteredBucketed] = useState<BucketedReading[]>([]);
   const [loading, setLoading] = useState<boolean>(true);
@@ -53,8 +56,12 @@ export const AqiReportScreen: React.FC<Props> = ({ readings }) => {
       setLoading(true);
       const stored = await storageService.loadReadings();
       setBucketedData(stored);
+      
+      const startISO = startDate ? formatDateToISO(startDate) : null;
+      const endISO = endDate ? formatDateToISO(endDate) : null;
+      
       setFilteredBucketed(
-        filterBucketedReadings(stored, startDate || null, endDate || null)
+        filterBucketedReadings(stored, startISO, endISO)
       );
 
       console.log('[AQI Report] Loaded', stored.length, 'bucketed readings');
@@ -71,16 +78,49 @@ export const AqiReportScreen: React.FC<Props> = ({ readings }) => {
     setRefreshing(false);
   };
 
+  // Format date to YYYY-MM-DD
+  const formatDateToISO = (date: Date): string => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  // Format date for display
+  const formatDateForDisplay = (date: Date | null): string => {
+    if (!date) return 'Select Date';
+    return fmtDate(date);
+  };
+
+  // Handle start date change
+  const onStartDateChange = (event: any, selectedDate?: Date) => {
+    setShowStartPicker(Platform.OS === 'ios'); // Keep open on iOS
+    if (selectedDate) {
+      setStartDate(selectedDate);
+    }
+  };
+
+  // Handle end date change
+  const onEndDateChange = (event: any, selectedDate?: Date) => {
+    setShowEndPicker(Platform.OS === 'ios'); // Keep open on iOS
+    if (selectedDate) {
+      setEndDate(selectedDate);
+    }
+  };
+
   // Apply filter
   const applyFilter = () => {
+    const startISO = startDate ? formatDateToISO(startDate) : null;
+    const endISO = endDate ? formatDateToISO(endDate) : null;
+    
     setFilteredBucketed(
-      filterBucketedReadings(bucketedData, startDate || null, endDate || null)
+      filterBucketedReadings(bucketedData, startISO, endISO)
     );
   };
 
   const clearFilter = () => {
-    setStartDate('');
-    setEndDate('');
+    setStartDate(null);
+    setEndDate(null);
     setFilteredBucketed(filterBucketedReadings(bucketedData, null, null));
   };
 
@@ -105,26 +145,49 @@ export const AqiReportScreen: React.FC<Props> = ({ readings }) => {
         {/* Filter Inputs */}
         <View style={styles.filterContainer}>
           <View style={styles.filterRow}>
+            {/* Start Date Picker */}
             <View style={styles.filterGroup}>
               <Text style={styles.filterLabel}>START DATE</Text>
-              <TextInput
-                style={styles.dateInput}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor="#71717a"
-                value={startDate}
-                onChangeText={setStartDate}
-              />
+              <TouchableOpacity
+                style={styles.dateButton}
+                onPress={() => setShowStartPicker(true)}>
+                <Text style={styles.dateButtonText}>
+                  {formatDateForDisplay(startDate)}
+                </Text>
+                <Text style={styles.calendarIcon}>📅</Text>
+              </TouchableOpacity>
+              {showStartPicker && (
+                <DateTimePicker
+                  value={startDate || new Date()}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={onStartDateChange}
+                  maximumDate={new Date()}
+                />
+              )}
             </View>
 
+            {/* End Date Picker */}
             <View style={styles.filterGroup}>
               <Text style={styles.filterLabel}>END DATE</Text>
-              <TextInput
-                style={styles.dateInput}
-                placeholder="YYYY-MM-DD"
-                placeholderTextColor="#71717a"
-                value={endDate}
-                onChangeText={setEndDate}
-              />
+              <TouchableOpacity
+                style={styles.dateButton}
+                onPress={() => setShowEndPicker(true)}>
+                <Text style={styles.dateButtonText}>
+                  {formatDateForDisplay(endDate)}
+                </Text>
+                <Text style={styles.calendarIcon}>📅</Text>
+              </TouchableOpacity>
+              {showEndPicker && (
+                <DateTimePicker
+                  value={endDate || new Date()}
+                  mode="date"
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  onChange={onEndDateChange}
+                  maximumDate={new Date()}
+                  minimumDate={startDate || undefined}
+                />
+              )}
             </View>
           </View>
 
@@ -248,14 +311,22 @@ const styles = StyleSheet.create({
     marginBottom: 4,
     letterSpacing: 0.5,
   },
-  dateInput: {
+  dateButton: {
     backgroundColor: '#18181b',
     borderWidth: 1,
     borderColor: '#3f3f46',
     borderRadius: 6,
-    padding: 8,
+    padding: 10,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  dateButtonText: {
     color: '#fff',
     fontSize: 14,
+  },
+  calendarIcon: {
+    fontSize: 18,
   },
   filterButtons: {
     flexDirection: 'row',

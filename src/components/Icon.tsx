@@ -27,6 +27,7 @@ export const Icon: React.FC<IconProps> = ({
     edit: '✎',
     radio: '📡',
     alert: '⚠️',
+    home: '⌂', 
   };
 
   return (

@@ -2,15 +2,26 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { Icon } from '../components/Icon';
-import { useAuth } from '../context/AuthContext'; // Import useAuth
+import { useAuth } from '../context/AuthContext';
 
-export const ProfileScreen: React.FC = () => {
+interface ProfileScreenProps {
+  onBackPress?: () => void;
+}
+
+export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBackPress }) => {
   // Get user and logout function from context
   const { currentUser, logout } = useAuth();
 
   return (
     <View style={styles.profileContainer}>
       <View style={styles.profileHeader}>
+        {onBackPress && (
+          <TouchableOpacity 
+            style={styles.homeButton}
+            onPress={onBackPress}>
+            <Icon name="home" size={24} color="#3b82f6" />
+          </TouchableOpacity>
+        )}
         <Text style={styles.profileTitle}>Profile</Text>
         <TouchableOpacity style={styles.editButton}>
           <Icon name="edit" size={20} color="#d4d4d8" />
@@ -68,7 +79,7 @@ export const ProfileScreen: React.FC = () => {
   );
 };
 
-// Styles copied from App.tsx
+// Styles
 const styles = StyleSheet.create({
   profileContainer: {
     padding: 16,
@@ -79,17 +90,33 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: 24,
   },
-  profileTitle: {
-    fontSize: 24,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  editButton: {
-    padding: 8,
+  homeButton: {
+    width: 44,
+    height: 44,
     backgroundColor: '#27272a',
     borderWidth: 1,
     borderColor: '#3f3f46',
     borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 12,
+  },
+  profileTitle: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#fff',
+    flex: 1,
+    textAlign: 'center',
+  },
+  editButton: {
+    width: 44,
+    height: 44,
+    backgroundColor: '#27272a',
+    borderWidth: 1,
+    borderColor: '#3f3f46',
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
   profileCard: {
     backgroundColor: '#27272a',
