@@ -1,4 +1,4 @@
-// App.tsx - UPDATED VERSION WITH 5-MINUTE BUCKETING
+// App.tsx - CRITICAL FIXES APPLIED
 
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { LoginScreen } from './src/screens/LoginScreen';
@@ -26,24 +26,21 @@ import {
 import { BleManager, State } from 'react-native-ble-plx';
 import RNBluetoothClassic from 'react-native-bluetooth-classic';
 
-// Import our new screens
 import { LiveFeedScreen } from './src/screens/LiveFeedScreen';
 import { AqiReportScreen } from './src/screens/AqiReportScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 import { SupportScreen } from './src/screens/SupportScreen';
 
-// Import our shared components and utilities
 import { Icon } from './src/components/Icon';
 import { Reading, BucketedReading } from './src/utils';
 import { storageService } from './src/services/storage';
 import { apiService } from './src/services/api';
 
-// BLE Service and Characteristic UUIDs
 const SERVICE_UUID = '0000FFE0-0000-1000-8000-00805F9B34FB';
 const CHARACTERISTIC_UUID = '0000FFE1-0000-1000-8000-00805F9B34FB';
 
 function MainApp() {
-  const { logout, token } = useAuth(); // ← UPDATED: Added token
+  const { logout, token } = useAuth();
   const [activeTab, setActiveTab] = useState<string>('live');
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
   const [btStatus, setBtStatus] = useState<'connected' | 'connecting' | 'disconnected'>('disconnected');
@@ -64,28 +61,30 @@ function MainApp() {
   const bleManagerRef = useRef<BleManager | null>(null);
   const stateSubscriptionRef = useRef<any>(null);
 
-  // NEW: Reference for current bucket
   const currentBucketRef = useRef<{
     bucketStart: Date;
     readings: number[];
   } | null>(null);
 
-  // Initialize Bluetooth and request permissions
+  // CRITICAL FIX: Set token when component mounts
+  useEffect(() => {
+    if (token) {
+      apiService.setToken(token);
+      console.log('[App] API token configured');
+    }
+  }, [token]);
+
   useEffect(() => {
     const initBluetooth = async () => {
       try {
         console.log('[BLE] Initializing Bluetooth...');
-
-        // Request permissions first
         await requestPermissions();
 
-        // Initialize BLE Manager only once
         if (!bleManagerRef.current) {
           bleManagerRef.current = new BleManager();
           console.log('[BLE] BLE Manager created');
         }
 
-        // Subscribe to BLE state changes
         stateSubscriptionRef.current = bleManagerRef.current.onStateChange((state) => {
           console.log('[BLE] State changed:', state);
           setBleState(state);
@@ -122,7 +121,6 @@ function MainApp() {
 
     initBluetooth();
 
-    // Cleanup
     return () => {
       console.log('[BLE] Cleaning up...');
 
@@ -152,7 +150,6 @@ function MainApp() {
         console.log('[Permissions] Android API Level:', apiLevel);
 
         if (apiLevel >= 31) {
-          // Android 12+ (API 31+)
           const granted = await PermissionsAndroid.requestMultiple([
             PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
             PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
@@ -172,7 +169,6 @@ function MainApp() {
             console.log('[Permissions] All permissions granted');
           }
         } else {
-          // Android 11 and below
           const granted = await PermissionsAndroid.requestMultiple([
             PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
           ]);
@@ -192,7 +188,6 @@ function MainApp() {
     }
   };
 
-  // Pulse animation
   useEffect(() => {
     if (btStatus === 'connected') {
       Animated.loop(
@@ -212,7 +207,6 @@ function MainApp() {
     }
   }, [btStatus, pulseAnim]);
 
-  // Auto-scroll
   useEffect(() => {
     if (scrollViewRef.current && readings.length > 0) {
       setTimeout(() => {
@@ -221,7 +215,6 @@ function MainApp() {
     }
   }, [readings]);
 
-  // Data check interval
   useEffect(() => {
     if (btStatus === 'connected') {
       dataCheckInterval.current = setInterval(() => {
@@ -258,7 +251,6 @@ function MainApp() {
       return;
     }
 
-    // Check if Bluetooth is powered on
     if (bleState !== State.PoweredOn) {
       Alert.alert(
         'Bluetooth Unavailable',
@@ -289,7 +281,6 @@ function MainApp() {
     const foundDevices = new Map();
 
     try {
-      // Scan for BLE devices
       bleManagerRef.current.startDeviceScan(null, null, (error, device) => {
         if (error) {
           console.log('[BLE] Scan Error:', error.message);
@@ -310,7 +301,6 @@ function MainApp() {
         }
       });
 
-      // Scan for Classic Bluetooth devices
       try {
         const paired = await RNBluetoothClassic.getBondedDevices();
         console.log('[Classic BT] Found', paired.length, 'paired devices');
@@ -333,7 +323,6 @@ function MainApp() {
       Alert.alert('Scan Failed', 'Could not scan for devices');
     }
 
-    // Stop scanning after 10 seconds
     setTimeout(() => {
       if (bleManagerRef.current) {
         bleManagerRef.current.stopDeviceScan();
@@ -355,7 +344,6 @@ function MainApp() {
       bleManagerRef.current.stopDeviceScan();
 
       if (deviceInfo.type === 'BLE') {
-        // Connect to BLE device
         const device = await bleManagerRef.current.connectToDevice(deviceInfo.rawDevice.id);
         console.log('[BLE] Connected to device');
 
@@ -386,7 +374,6 @@ function MainApp() {
 
         Alert.alert('Success', `Connected to ${deviceInfo.name} (BLE)`);
       } else {
-        // Connect to Classic Bluetooth device
         const device = await RNBluetoothClassic.connectToDevice(deviceInfo.rawDevice.address);
         console.log('[Classic BT] Connected to device');
 
@@ -396,7 +383,6 @@ function MainApp() {
         setDeviceModalVisible(false);
         setLastDataTime(new Date());
 
-        // Read data periodically from Classic Bluetooth
         classicReadInterval.current = setInterval(async () => {
           try {
             const available = await device.available();
@@ -430,27 +416,10 @@ function MainApp() {
       try {
         console.log('[Disconnect] Disconnecting...');
 
-        // NEW: Save any pending bucket before disconnecting
         if (currentBucketRef.current && currentBucketRef.current.readings.length > 0) {
-          const intervalMs = 5 * 60 * 1000;
-          const prevBucket = currentBucketRef.current;
-          const avgValue = prevBucket.readings.reduce((a, b) => a + b, 0) / prevBucket.readings.length;
-
-          const bucketedReading: BucketedReading = {
-            bucketStart: prevBucket.bucketStart,
-            bucketEnd: new Date(prevBucket.bucketStart.getTime() + intervalMs),
-            avgValue,
-            minValue: Math.min(...prevBucket.readings),
-            maxValue: Math.max(...prevBucket.readings),
-            count: prevBucket.readings.length,
-            readings: prevBucket.readings,
-          };
-
-          await storageService.appendReading(bucketedReading);
-          console.log('[Disconnect] Saved pending bucket');
+          await saveBucket(currentBucketRef.current);
         }
 
-        // NEW: Clear the bucket reference
         currentBucketRef.current = null;
 
         if (bleSubscription.current) {
@@ -485,7 +454,54 @@ function MainApp() {
     }
   };
 
-  // UPDATED: parseData function with 5-minute bucketing
+  // CRITICAL FIX: Improved saveBucket function
+  const saveBucket = async (bucket: { bucketStart: Date; readings: number[] }) => {
+    const intervalMs = 5 * 60 * 1000;
+    const avgValue = bucket.readings.reduce((a, b) => a + b, 0) / bucket.readings.length;
+
+    const bucketedReading: BucketedReading = {
+      bucketStart: bucket.bucketStart,
+      bucketEnd: new Date(bucket.bucketStart.getTime() + intervalMs),
+      avgValue,
+      minValue: Math.min(...bucket.readings),
+      maxValue: Math.max(...bucket.readings),
+      count: bucket.readings.length,
+      readings: bucket.readings,
+    };
+
+    try {
+      // Save to AsyncStorage
+      await storageService.appendReading(bucketedReading);
+      console.log('[Storage] Bucket saved:', {
+        start: bucketedReading.bucketStart.toISOString(),
+        avg: avgValue.toFixed(2),
+        count: bucket.readings.length,
+      });
+
+      // CRITICAL FIX: Sync to backend with proper error handling
+      if (token && connectedDevice) {
+        try {
+          await apiService.ingestData({
+            deviceId: connectedDevice.id,
+            timestamp: bucketedReading.bucketStart.toISOString(),
+            pm25: bucketedReading.avgValue,
+            metadata: {
+              min: bucketedReading.minValue,
+              max: bucketedReading.maxValue,
+              count: bucketedReading.count,
+            },
+          });
+          console.log('[API] Bucket synced to backend');
+        } catch (apiError) {
+          console.error('[API] Failed to sync bucket:', apiError);
+          // Don't throw - we already saved locally
+        }
+      }
+    } catch (error) {
+      console.error('[Storage] Error saving bucket:', error);
+    }
+  };
+
   const parseData = (rawData: string) => {
     const match = rawData.match(/PM2\.5\(ATM\):\s*([\d.]+)\s*ug\/m3/);
     if (match) {
@@ -493,61 +509,25 @@ function MainApp() {
       const now = new Date();
       console.log('[Data] Received PM2.5:', val);
 
-      // Get 5-minute bucket start time
-      const intervalMs = 5 * 60 * 1000; // 5 minutes
+      const intervalMs = 5 * 60 * 1000;
       const bucketTime = Math.floor(now.getTime() / intervalMs) * intervalMs;
       const bucketStart = new Date(bucketTime);
 
-      // Check if we need a new bucket
       if (!currentBucketRef.current ||
         currentBucketRef.current.bucketStart.getTime() !== bucketTime) {
 
-        // Save previous bucket if exists
         if (currentBucketRef.current && currentBucketRef.current.readings.length > 0) {
-          const prevBucket = currentBucketRef.current;
-          const avgValue = prevBucket.readings.reduce((a, b) => a + b, 0) / prevBucket.readings.length;
-
-          const bucketedReading: BucketedReading = {
-            bucketStart: prevBucket.bucketStart,
-            bucketEnd: new Date(prevBucket.bucketStart.getTime() + intervalMs),
-            avgValue,
-            minValue: Math.min(...prevBucket.readings),
-            maxValue: Math.max(...prevBucket.readings),
-            count: prevBucket.readings.length,
-            readings: prevBucket.readings,
-          };
-
-          // Save to AsyncStorage
-          storageService.appendReading(bucketedReading).catch(err =>
-            console.error('[Storage] Error saving bucket:', err)
-          );
-
-          // Optionally sync to backend
-          if (token && connectedDevice) {
-            apiService.ingestData({
-              deviceId: connectedDevice.id,
-              timestamp: bucketedReading.bucketStart.toISOString(),
-              pm25: bucketedReading.avgValue,
-              metadata: {
-                min: bucketedReading.minValue,
-                max: bucketedReading.maxValue,
-                count: bucketedReading.count,
-              },
-            }).catch(err => console.error('[API] Ingest error:', err));
-          }
+          saveBucket(currentBucketRef.current);
         }
 
-        // Start new bucket
         currentBucketRef.current = {
           bucketStart,
           readings: [val],
         };
       } else {
-        // Add to current bucket
         currentBucketRef.current.readings.push(val);
       }
 
-      // Still update live readings for UI
       setReadings((prev) => {
         const next = [...prev, { ts: now, value: val }];
         return next.length > 500 ? next.slice(-500) : next;
@@ -602,21 +582,19 @@ function MainApp() {
         />
       </View>
 
-      {/* Tab Selector - Only show for Live and AQI tabs */}
+      {/* Tab Selector */}
       {(activeTab === 'live' || activeTab === 'aqi') && (
         <View style={styles.tabContainer}>
           <View style={styles.tabInner}>
             <TouchableOpacity
               onPress={() => setActiveTab('live')}
               style={[styles.tab, activeTab === 'live' && styles.tabActive]}>
-              <Icon name="activity" size={16} color={activeTab === 'live' ? '#18181b' : '#d4d4d8'} />
               <Text style={[styles.tabText, activeTab === 'live' && styles.tabTextActive]}>Live PM2.5</Text>
             </TouchableOpacity>
 
             <TouchableOpacity
               onPress={() => setActiveTab('aqi')}
               style={[styles.tab, activeTab === 'aqi' && styles.tabActive]}>
-              <Icon name="wind" size={16} color={activeTab === 'aqi' ? '#18181b' : '#d4d4d8'} />
               <Text style={[styles.tabText, activeTab === 'aqi' && styles.tabTextActive]}>AQI Report</Text>
             </TouchableOpacity>
           </View>
@@ -734,8 +712,8 @@ function MainApp() {
         </View>
       </Modal>
 
-            {/* Content */}
-            <ScrollView style={styles.content}>
+      {/* Content */}
+      <ScrollView style={styles.content}>
         {activeTab === 'live' && (
           <LiveFeedScreen
             btStatus={btStatus}
@@ -748,7 +726,12 @@ function MainApp() {
           />
         )}
 
-        {activeTab === 'aqi' && <AqiReportScreen readings={readings} />}
+        {activeTab === 'aqi' && (
+          <AqiReportScreen
+            readings={readings}
+            deviceId={connectedDevice?.id || '6943fa46f429c94f71aa8df4'}
+          />
+        )}
 
         {activeTab === 'profile' && (
           <ProfileScreen onBackPress={() => setActiveTab('live')} />
@@ -762,7 +745,6 @@ function MainApp() {
   );
 }
 
-// Root components that handle auth
 export default function App() {
   return (
     <AuthProvider>
@@ -789,7 +771,6 @@ function AppContent() {
 
   return <MainApp />;
 }
-
 // COMPLETE STYLES
 const styles = StyleSheet.create({
   container: {

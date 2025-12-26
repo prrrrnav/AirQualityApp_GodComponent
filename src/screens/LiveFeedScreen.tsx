@@ -19,7 +19,7 @@ interface Props {
   btBadge: { liveText: string; dotColor: string };
   pulseAnim: Animated.Value;
   // scrollViewRef: React.RefObject<ScrollView>;
-  connectedDeviceId?: string; // ADD THIS
+  connectedDeviceId?: string;
 }
 
 export const LiveFeedScreen: React.FC<Props> = ({
@@ -38,9 +38,6 @@ export const LiveFeedScreen: React.FC<Props> = ({
       <View style={styles.liveHeaderContainer}>
         <View style={styles.liveHeaderTop}>
           <View style={styles.liveTitle}>
-            <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-              <Icon name="radio" size={20} color="#ef4444" />
-            </Animated.View>
             <Text style={styles.liveTitleText}>Live PM2.5</Text>
             <View style={styles.liveValue}>
               <Text style={styles.liveValueText}>
@@ -70,7 +67,6 @@ export const LiveFeedScreen: React.FC<Props> = ({
       {/* Live Feed Table */}
       <View style={styles.tableContainer}>
         <View style={styles.tableHeader}>
-          <Icon name="activity" size={16} color="#e4e4e7" />
           <View style={styles.tableHeaderContent}>
             <Text style={styles.tableHeaderText}>Live Feed - PM2.5</Text>
             {connectedDeviceId && (
@@ -147,7 +143,6 @@ const styles = StyleSheet.create({
   },
   tableHeaderContent: {
     flex: 1,
-    marginLeft: 8,
   },
   deviceMacText: {
     fontSize: 10,
@@ -168,7 +163,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '600',
     color: '#fff',
-    marginLeft: 8,
   },
   liveValue: {
     backgroundColor: '#fff',
@@ -230,7 +224,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
     color: '#e4e4e7',
-    marginLeft: 8,
   },
   tableHeaderCount: {
     fontSize: 11,

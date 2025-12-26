@@ -9,6 +9,13 @@ apply plugin: "com.facebook.react"
 react {
     /* Autolinking */
     autolinkLibrariesWithApp()
+
+    // ADD THIS LINE TO FIX THE CLI LOCATION ERROR
+    cliFile = file("../../node_modules/react-native/cli.js")
+    
+    // Optional: If it still fails to find the react-native directory
+    reactNativeDir = file("../../node_modules/react-native")
+    codegenDir = file("../../node_modules/@react-native/codegen")
 }
 
 /**

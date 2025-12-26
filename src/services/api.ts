@@ -1,6 +1,9 @@
 // src/services/api.ts
 
-const API_BASE_URL = 'https://air.shudhvayu.com'; // Your VPS
+const API_BASE_URL = 'https://air.shudhvayu.com';
+
+// TEST CONSTANT: Change this to a MAC ID that actually exists in your DB
+const DEBUG_DEVICE_ID = '6943fa46f429c94f71aa8df4';
 
 export interface SignupData {
   name: string;
@@ -25,108 +28,105 @@ export interface AuthResponse {
   data?: any;
 }
 
+export interface HistoryQueryParams {
+  deviceId: string;
+  from?: string;
+  to?: string;
+  limit?: number;
+}
+
 class ApiService {
   private baseUrl: string;
+  private authToken: string | null = null;
+  private readonly DEFAULT_TIMEOUT = 10000; // 10 seconds
 
   constructor(baseUrl: string) {
     this.baseUrl = baseUrl;
   }
 
-  // Authentication endpoints
-  // src/services/api.ts - Update the signup function
+  setToken(token: string | null) {
+    this.authToken = token;
+    console.log('[API] Token updated:', token ? 'Token set' : 'Token cleared');
+  }
+
+  getToken(): string | null {
+    return this.authToken;
+  }
+
+  private async fetchWithTimeout(url: string, options: RequestInit, timeout: number = this.DEFAULT_TIMEOUT): Promise<Response> {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeout);
+
+    try {
+      const response = await fetch(url, {
+        ...options,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+      return response;
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        throw new Error(`Request timeout after ${timeout / 1000} seconds`);
+      }
+      throw error;
+    }
+  }
 
   async signup(data: SignupData): Promise<AuthResponse> {
     try {
-      console.log('[API] Signup request to:', `${this.baseUrl}/api/v1/auth/signup`);
-      console.log('[API] Signup data:', { ...data, password: '***' });
-
-      const response = await fetch(`${this.baseUrl}/api/v1/auth/signup`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/api/v1/auth/signup`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
         },
-        body: JSON.stringify(data),
-      });
-
+        15000
+      );
       const result = await response.json();
-      console.log('[API] Signup response:', JSON.stringify(result, null, 2));
-
-      if (!response.ok) {
-        // Extract error message from backend
-        const errorMessage = result.error || result.message || 'Signup failed';
-        throw new Error(errorMessage);
-      }
-
-      // Check if we have a token
-      if (!result.token) {
-        throw new Error('No token received from server');
-      }
-
-      // Parse the response
+      if (!response.ok) throw new Error(result.error || result.message || 'Signup failed');
+      
       const userData = result.data || result.user || {};
-
-      const user = {
-        id: userData._id || userData.id || 'unknown',
-        name: userData.name || data.name,
-        email: userData.email || data.email,
-      };
-
-      console.log('[API] Parsed user:', user);
-
       return {
-        success: result.success || response.ok,
+        success: true,
         token: result.token,
-        user: user,
+        user: {
+          id: userData._id || userData.id || 'unknown',
+          name: userData.name || data.name,
+          email: userData.email || data.email,
+        },
         message: result.message,
       };
     } catch (error: any) {
       console.error('[API] Signup error:', error);
-      throw error; // Re-throw the error so LoginScreen can handle it
+      throw error;
     }
   }
 
   async login(data: LoginData): Promise<AuthResponse> {
     try {
-      console.log('[API] Login request to:', `${this.baseUrl}/api/v1/auth/login`);
-      console.log('[API] Login data:', { email: data.email, password: '***' });
-
-      const response = await fetch(`${this.baseUrl}/api/v1/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/api/v1/auth/login`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
         },
-        body: JSON.stringify(data),
-      });
-
+        15000
+      );
       const result = await response.json();
-      console.log('[API] Login response:', JSON.stringify(result, null, 2));
+      if (!response.ok) throw new Error(result.message || result.error || 'Login failed');
 
-      if (!response.ok) {
-        throw new Error(result.message || result.error || 'Login failed');
-      }
-
-      // Check if we have a token
-      if (!result.token) {
-        throw new Error('No token received from server');
-      }
-
-      // Parse the response - your backend might return user data differently
-      // The user data could be in result.data, result.user, or directly in result
       const userData = result.data || result.user || {};
-
-      // If no user data in response, decode from token or use email
-      const user = {
-        id: userData._id || userData.id || 'decoded-from-token',
-        name: userData.name || data.email.split('@')[0],
-        email: userData.email || data.email,
-      };
-
-      console.log('[API] Parsed user:', user);
-
       return {
-        success: result.success || response.ok,
+        success: true,
         token: result.token,
-        user: user,
+        user: {
+          id: userData._id || userData.id || 'decoded-from-token',
+          name: userData.name || data.email.split('@')[0],
+          email: userData.email || data.email,
+        },
         message: result.message,
       };
     } catch (error: any) {
@@ -135,27 +135,24 @@ class ApiService {
     }
   }
 
-  // Data endpoints
-  async registerDevice(macId: string, token: string) {
+  async registerDevice(macId: string, token?: string) {
     try {
-      console.log('[API] Register device request');
+      const authToken = token || this.authToken;
+      if (!authToken) throw new Error('No authentication token available');
 
-      const response = await fetch(`${this.baseUrl}/api/v1/data/devices`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({ macId }),
-      });
-
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/api/v1/data/devices`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${authToken}`,
+          },
+          body: JSON.stringify({ macId }),
+        }
+      );
       const result = await response.json();
-      console.log('[API] Register device response:', result);
-
-      if (!response.ok) {
-        throw new Error(result.message || result.error || 'Device registration failed');
-      }
-
+      if (!response.ok) throw new Error(result.message || result.error || 'Device registration failed');
       return result;
     } catch (error: any) {
       console.error('[API] Register device error:', error);
@@ -163,52 +160,65 @@ class ApiService {
     }
   }
 
-  async getHistory(deviceId: string, token: string) {
+  /**
+   * MODIFIED: Added Emulator/Debug Bypass for Device ID
+   */
+  async getHistory(params: HistoryQueryParams, token?: string) {
     try {
-      console.log('[API] Get history request for device:', deviceId);
+      const authToken = token || this.authToken;
+      if (!authToken) throw new Error('No authentication token available');
 
-      const response = await fetch(
-        `${this.baseUrl}/api/v1/data/history?deviceId=${deviceId}`,
+      // 1. BYPASS LOGIC: If no deviceId is provided (emulator), use the DEBUG_DEVICE_ID
+      const effectiveDeviceId = (params.deviceId && params.deviceId !== '') 
+        ? params.deviceId 
+        : DEBUG_DEVICE_ID;
+
+      console.log(`[API] Fetching history for Device: ${effectiveDeviceId} ${!params.deviceId ? '(Using Emulator Fallback)' : ''}`);
+
+      const queryParams = new URLSearchParams();
+      queryParams.append('deviceId', effectiveDeviceId);
+      
+      if (params.from) queryParams.append('from', params.from);
+      if (params.to) queryParams.append('to', params.to);
+      if (params.limit) queryParams.append('limit', params.limit.toString());
+
+      const url = `${this.baseUrl}/api/v1/data/history?${queryParams.toString()}`;
+      console.log('[API] Request URL:', url);
+
+      const response = await this.fetchWithTimeout(
+        url,
         {
+          method: 'GET',
           headers: {
-            'Authorization': `Bearer ${token}`,
+            'Authorization': `Bearer ${authToken}`,
+            'Content-Type': 'application/json',
           },
-        }
+        },
+        20000 
       );
 
       const result = await response.json();
-      console.log('[API] Get history response:', result);
+      if (!response.ok) throw new Error(result.message || result.error || 'Failed to fetch history');
 
-      if (!response.ok) {
-        throw new Error(result.message || result.error || 'Failed to fetch history');
-      }
-
-      return result;
+      return result.data || [];
     } catch (error: any) {
       console.error('[API] Get history error:', error);
-      throw new Error(error.message || 'Network error');
+      throw error;
     }
   }
 
   async ingestData(data: any) {
     try {
-      console.log('[API] Ingest data request');
-
-      const response = await fetch(`${this.baseUrl}/api/v1/data/ingest`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(data),
-      });
-
+      const response = await this.fetchWithTimeout(
+        `${this.baseUrl}/api/v1/data/ingest`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        }
+      );
       const result = await response.json();
-      console.log('[API] Ingest data response:', result);
-
-      if (!response.ok) {
-        throw new Error(result.message || result.error || 'Data ingestion failed');
-      }
-
+      if (!response.ok) throw new Error(result.message || result.error || 'Data ingestion failed');
       return result;
     } catch (error: any) {
       console.error('[API] Ingest data error:', error);
