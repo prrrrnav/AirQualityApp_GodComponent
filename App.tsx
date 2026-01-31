@@ -928,7 +928,7 @@ function MainApp() {
       </Modal>
 
       {/* Main Content */}
-      <ScrollView style={styles.content}>
+      <View style={styles.content}>
         {activeTab === 'live' && (
           <LiveFeedScreen
             btStatus={btStatus}
@@ -956,7 +956,7 @@ function MainApp() {
         {activeTab === 'support' && (
           <SupportScreen onBackPress={() => setActiveTab('live')} />
         )}
-      </ScrollView>
+      </View>
     </SafeAreaView>
   );
 }
