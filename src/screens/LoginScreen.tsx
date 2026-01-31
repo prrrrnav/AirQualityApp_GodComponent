@@ -161,7 +161,7 @@ export const LoginScreen = () => {
           <View style={styles.authBox}>
             {/* Logo/Title */}
             <View style={styles.header}>
-              <Icon name="wind" size={48} color="#3b82f6" />
+              {/* <Icon name="wind" size={48} color="#3b82f6" /> */}
               <Text style={styles.appTitle}>Shudhvayu</Text>
               <Text style={styles.appSubtitle}>Air Quality Monitor</Text>
             </View>
@@ -198,7 +198,7 @@ export const LoginScreen = () => {
             {/* Name Field (Signup only) */}
             {mode === 'signup' && (
               <View style={styles.inputContainer}>
-                <Icon name="user" size={20} color="#71717a" />
+                {/* <Icon name="user" size={20} color="#71717a" /> */}
                 <TextInput
                   style={styles.authInput}
                   placeholder="Full Name"
@@ -213,7 +213,7 @@ export const LoginScreen = () => {
 
             {/* Email Field */}
             <View style={styles.inputContainer}>
-              <Icon name="info" size={20} color="#71717a" />
+              {/* <Icon name="info" size={20} color="#71717a" /> */}
               <TextInput
                 style={styles.authInput}
                 placeholder="Email"
@@ -230,7 +230,7 @@ export const LoginScreen = () => {
             {/* Password Field */}
             {mode !== 'forgot' && (
               <View style={styles.inputContainer}>
-                <Icon name="shield" size={20} color="#71717a" />
+                {/* <Icon name="shield" size={20} color="#71717a" /> */}
                 <TextInput
                   style={styles.authInput}
                   placeholder="Password"
@@ -252,7 +252,7 @@ export const LoginScreen = () => {
             {/* Confirm Password Field (Signup only) */}
             {mode === 'signup' && (
               <View style={styles.inputContainer}>
-                <Icon name="shield" size={20} color="#71717a" />
+                {/* <Icon name="shield" size={20} color="#71717a" /> */}
                 <TextInput
                   style={styles.authInput}
                   placeholder="Confirm Password"

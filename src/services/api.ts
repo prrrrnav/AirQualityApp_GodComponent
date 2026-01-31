@@ -146,7 +146,7 @@ class ApiService {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${token}`,
         },
-        body: JSON.stringify({ macId }),
+        body: JSON.stringify({ macAddress: macId }),
       });
 
       const result = await response.json();
@@ -163,34 +163,50 @@ class ApiService {
     }
   }
 
-  async getHistory(deviceId: string, token: string) {
-    try {
-      console.log('[API] Get history request for device:', deviceId);
+// src/services/api.ts
 
-      const response = await fetch(
-        `${this.baseUrl}/api/v1/data/history?deviceId=${deviceId}`,
-        {
-          headers: {
-            'Authorization': `Bearer ${token}`,
-          },
-        }
-      );
+async getHistory(deviceId: string, token: string, startDate?: string | null, endDate?: string | null) {
+  try {
+    // Append dates to the query string if they exist
+    // URL encode the dates since ISO strings contain special characters (:, +, etc.)
+    let url = `${this.baseUrl}/api/v1/data/history?deviceId=${encodeURIComponent(deviceId)}`;
+    if (startDate) url += `&startDate=${encodeURIComponent(startDate)}`;
+    if (endDate) url += `&endDate=${encodeURIComponent(endDate)}`;
 
-      const result = await response.json();
-      console.log('[API] Get history response:', result);
+    console.log('[API] Get history request:', url);
 
-      if (!response.ok) {
-        throw new Error(result.message || result.error || 'Failed to fetch history');
-      }
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+    });
 
-      return result;
-    } catch (error: any) {
-      console.error('[API] Get history error:', error);
-      throw new Error(error.message || 'Network error');
+    const result = await response.json();
+    console.log('[API] Get history raw response:', JSON.stringify(result, null, 2));
+    
+    if (!response.ok) {
+      // Backend returns errors with message and statusCode
+      const errorMessage = result.message || result.error || `Failed to fetch history (${response.status})`;
+      const error = new Error(errorMessage);
+      (error as any).statusCode = result.statusCode || response.status;
+      throw error;
     }
-  }
+    
+    // Validate response structure
+    if (!result.success) {
+      console.warn('[API] Response indicates failure:', result);
+    }
 
-  async ingestData(data: any) {
+    // Return the full result object so the component can access result.data
+    // This ensures consistent structure: { data: [...], success: true, ... }
+    return result; 
+  } catch (error: any) {
+    console.error('[API] Get history error:', error);
+    throw error;
+  }
+}
+
+  async ingestData(data: any,token: string) {
     try {
       console.log('[API] Ingest data request');
 
@@ -198,6 +214,7 @@ class ApiService {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`,
         },
         body: JSON.stringify(data),
       });

@@ -117,6 +117,10 @@ export function filterReadings(
 /**
  * Filter bucketed readings by date range
  */
+// src/utils.ts
+
+// src/utils.ts
+
 export function filterBucketedReadings(
   readings: BucketedReading[],
   startDateISO?: string | null,
@@ -132,16 +136,19 @@ export function filterBucketedReadings(
     end = new Date(endDateISO + 'T23:59:59');
   }
 
-  // Default to today if no dates provided
+  // REMOVE OR COMMENT OUT THIS BLOCK:
+  /*
   if (!start && !end) {
     const now = new Date();
     start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
   }
+  */
 
   return readings.filter((r: BucketedReading) => {
+    // If no dates provided, afterStart/beforeEnd will be true (no filter)
     const afterStart = start ? r.bucketStart >= start : true;
-    const beforeEnd = end ? r.bucketEnd <= end : true;
+    const beforeEnd = end ? r.bucketStart <= end : true;
     return afterStart && beforeEnd;
   });
 }

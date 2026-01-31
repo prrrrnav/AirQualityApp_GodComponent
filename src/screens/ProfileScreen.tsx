@@ -72,7 +72,7 @@ export const ProfileScreen: React.FC<ProfileScreenProps> = ({ onBackPress }) => 
 
       {/* Logout button uses the function from context */}
       <TouchableOpacity style={styles.logoutButton} onPress={logout}>
-        <Icon name="logout" size={20} color="#f87171" />
+        {/* <Icon name="logout" size={20} color="#f87171" /> */}
         <Text style={styles.logoutButtonText}>Logout</Text>
       </TouchableOpacity>
     </View>
