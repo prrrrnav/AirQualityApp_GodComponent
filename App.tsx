@@ -1,4 +1,8 @@
-// App.tsx - UPDATED VERSION WITH 5-MINUTE BUCKETING
+// App.tsx — FIXED VERSION
+// Fixes in this file:
+//   C1 — flushInterval stale closure on connectedDevice/token → read from refs
+//   C2 — duplicate bucket send from parseData AND flushInterval → removed from parseData
+//   C3 — bucket nulled before API resolves (data loss on failure) → null only after success
 
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { LoginScreen } from './src/screens/LoginScreen';
@@ -26,13 +30,11 @@ import {
 import { BleManager, State } from 'react-native-ble-plx';
 import RNBluetoothClassic from 'react-native-bluetooth-classic';
 
-// Import our new screens
 import { LiveFeedScreen } from './src/screens/LiveFeedScreen';
 import { AqiReportScreen } from './src/screens/AqiReportScreen';
 import { ProfileScreen } from './src/screens/ProfileScreen';
 import { SupportScreen } from './src/screens/SupportScreen';
 
-// Import our shared components and utilities
 import { Icon } from './src/components/Icon';
 import { Reading, BucketedReading } from './src/utils';
 import { storageService } from './src/services/storage';
@@ -43,7 +45,7 @@ const SERVICE_UUID = '0000FFE0-0000-1000-8000-00805F9B34FB';
 const CHARACTERISTIC_UUID = '0000FFE1-0000-1000-8000-00805F9B34FB';
 
 function MainApp() {
-  const { logout, token } = useAuth(); // ← UPDATED: Added token
+  const { logout, token } = useAuth();
   const [activeTab, setActiveTab] = useState<string>('live');
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
   const [btStatus, setBtStatus] = useState<'connected' | 'connecting' | 'disconnected'>('disconnected');
@@ -64,28 +66,56 @@ function MainApp() {
   const bleManagerRef = useRef<BleManager | null>(null);
   const stateSubscriptionRef = useRef<any>(null);
 
-  // NEW: Reference for current bucket
+  // Accumulates raw readings within the current 5-minute window
   const currentBucketRef = useRef<{
     bucketStart: Date;
     readings: number[];
   } | null>(null);
 
-  // Initialize Bluetooth and request permissions
+  // FIX C1: Refs that mirror state so the flush interval (set up once) always reads
+  // the latest values without needing to be torn down and recreated.
+  const connectedDeviceRef = useRef<any>(null);
+  const tokenRef = useRef<string | null>(null);
+
+  // Keep refs in sync whenever state changes
+  useEffect(() => {
+    connectedDeviceRef.current = connectedDevice;
+  }, [connectedDevice]);
+
+  useEffect(() => {
+    tokenRef.current = token;
+  }, [token]);
+
+  // Ref that always holds the latest parseData function so that BLE/Classic
+  // callbacks (set up once at connection time) always invoke the freshest logic
+  const parseDataRef = useRef<(rawData: string) => boolean>(() => false);
+
+  // Accumulates partial BLE/Classic serial chunks until a full message is assembled
+  const dataBufferRef = useRef<string>('');
+
+  // Prevents the "no data" alert from firing repeatedly while data is stalled
+  const noDataAlertShownRef = useRef<boolean>(false);
+
+  // Mirrors lastDataTime in a ref so dataCheckInterval can read it without
+  // being a dependency (which would cause constant interval teardown/recreation)
+  const lastDataTimeRef = useRef<Date | null>(null);
+  useEffect(() => {
+    lastDataTimeRef.current = lastDataTime;
+  }, [lastDataTime]);
+
+  // Initialises BLE manager and requests OS permissions on mount
   useEffect(() => {
     const initBluetooth = async () => {
       try {
         console.log('[BLE] Initializing Bluetooth...');
-
-        // Request permissions first
         await requestPermissions();
 
-        // Initialize BLE Manager only once
         if (!bleManagerRef.current) {
           bleManagerRef.current = new BleManager();
           console.log('[BLE] BLE Manager created');
         }
 
-        // Subscribe to BLE state changes
+        // Listen for system Bluetooth on/off changes
         stateSubscriptionRef.current = bleManagerRef.current.onStateChange((state) => {
           console.log('[BLE] State changed:', state);
           setBleState(state);
@@ -105,10 +135,7 @@ function MainApp() {
                     }
                   },
                 },
-                {
-                  text: 'Cancel',
-                  style: 'cancel',
-                },
+                { text: 'Cancel', style: 'cancel' },
               ]
             );
           }
@@ -122,10 +149,9 @@ function MainApp() {
 
     initBluetooth();
 
-    // Cleanup
+    // Cleanup all active subscriptions and timers on unmount
     return () => {
       console.log('[BLE] Cleaning up...');
-
       if (bleSubscription.current) {
         bleSubscription.current.remove();
         bleSubscription.current = null;
@@ -145,6 +171,7 @@ function MainApp() {
     };
   }, []);
 
+  // Requests the Android permissions required for Bluetooth scanning
   const requestPermissions = async () => {
     if (Platform.OS === 'android') {
       try {
@@ -152,17 +179,14 @@ function MainApp() {
         console.log('[Permissions] Android API Level:', apiLevel);
 
         if (apiLevel >= 31) {
-          // Android 12+ (API 31+)
           const granted = await PermissionsAndroid.requestMultiple([
             PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
             PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
             PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
           ]);
-
           const allGranted = Object.values(granted).every(
             (status) => status === PermissionsAndroid.RESULTS.GRANTED
           );
-
           if (!allGranted) {
             Alert.alert(
               'Permissions Required',
@@ -172,16 +196,11 @@ function MainApp() {
             console.log('[Permissions] All permissions granted');
           }
         } else {
-          // Android 11 and below
           const granted = await PermissionsAndroid.requestMultiple([
             PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
           ]);
-
           if (granted[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION] !== PermissionsAndroid.RESULTS.GRANTED) {
-            Alert.alert(
-              'Permission Required',
-              'Location permission is required to scan for Bluetooth devices'
-            );
+            Alert.alert('Permission Required', 'Location permission is required to scan for Bluetooth devices');
           } else {
             console.log('[Permissions] Location permission granted');
           }
@@ -192,27 +211,19 @@ function MainApp() {
     }
   };
 
-  // Pulse animation
+  // Animates the pulse ring around the Bluetooth icon while connected
   useEffect(() => {
     if (btStatus === 'connected') {
       Animated.loop(
         Animated.sequence([
-          Animated.timing(pulseAnim, {
-            toValue: 1.3,
-            duration: 1000,
-            useNativeDriver: true,
-          }),
-          Animated.timing(pulseAnim, {
-            toValue: 1,
-            duration: 1000,
-            useNativeDriver: true,
-          }),
+          Animated.timing(pulseAnim, { toValue: 1.3, duration: 1000, useNativeDriver: true }),
+          Animated.timing(pulseAnim, { toValue: 1, duration: 1000, useNativeDriver: true }),
         ])
       ).start();
     }
   }, [btStatus, pulseAnim]);
 
-  // Auto-scroll
+  // Auto-scrolls the live feed table to the newest row when readings change
   useEffect(() => {
     if (scrollViewRef.current && readings.length > 0) {
       setTimeout(() => {
@@ -221,15 +232,17 @@ function MainApp() {
     }
   }, [readings]);
 
-  // Data check interval
+  // Watchdog: alerts once if no data has arrived for >15 s while connected.
+  // Reads lastDataTime from a ref (not state) so this effect only mounts/unmounts
+  // on btStatus change — not on every single reading.
   useEffect(() => {
     if (btStatus === 'connected') {
       dataCheckInterval.current = setInterval(() => {
-        if (lastDataTime) {
-          const now = new Date();
-          const timeSinceLastData = (now.getTime() - lastDataTime.getTime()) / 1000;
-
-          if (timeSinceLastData > 15) {
+        const currentLastDataTime = lastDataTimeRef.current;
+        if (currentLastDataTime) {
+          const timeSinceLastData = (Date.now() - currentLastDataTime.getTime()) / 1000;
+          if (timeSinceLastData > 30 && !noDataAlertShownRef.current) {
+            noDataAlertShownRef.current = true; // lock until fresh data arrives
             Alert.alert(
               'No Data Received',
               'No data received from device in the last 15 seconds. Connection may be lost.',
@@ -248,17 +261,106 @@ function MainApp() {
     return () => {
       if (dataCheckInterval.current) {
         clearInterval(dataCheckInterval.current);
+        dataCheckInterval.current = null;
       }
     };
-  }, [btStatus, lastDataTime]);
+  }, [btStatus]); // only btStatus — lastDataTime read via ref
 
+  // Registers the device with the backend so it can receive ingested data
+  const registerDeviceWithBackend = async (deviceId: string) => {
+    if (!token) {
+      console.log('[Device Registration] No token available');
+      return;
+    }
+    try {
+      console.log('[Device Registration] Registering device:', deviceId);
+      const result = await apiService.registerDevice(deviceId, token);
+      console.log('[Device Registration] Success:', result);
+      return result;
+    } catch (error: any) {
+      console.error('[Device Registration] Error:', error.message);
+      // Non-blocking — connection proceeds even if registration fails
+    }
+  };
+
+  // Periodically checks whether the current bucket is older than 1 minutes.
+  // When it is, the bucket is flushed to local storage and the backend.
+  //
+  // FIX C1: This effect now runs once on mount and stays alive. It reads
+  //         connectedDevice and token from REFS, not state, so it never goes
+  //         stale and never needs to be torn down/recreated.
+  // FIX C3: The bucket ref is only nulled AFTER the API call succeeds.
+  //         If the call fails the bucket stays intact for the next 30-s check.
+  useEffect(() => {
+    const flushInterval = setInterval(async () => {
+      // Read current values from refs — always fresh, no stale closure
+      const device = connectedDeviceRef.current;
+      const tok = tokenRef.current;
+
+      // Skip if not connected or not authenticated
+      if (!device || !tok) return;
+
+      const bucket = currentBucketRef.current;
+      if (!bucket || bucket.readings.length === 0) return;
+
+      const intervalMs = 1 * 60 * 1000; // 1 minutes debugging-1
+      const bucketAge = Date.now() - bucket.bucketStart.getTime();
+
+      // Only flush once the full 5-minute window has elapsed
+      if (bucketAge < intervalMs) return;
+
+      console.log('[Bucket Flush] Flushing bucket with', bucket.readings.length, 'readings');
+
+      const avgValue = bucket.readings.reduce((a, b) => a + b, 0) / bucket.readings.length;
+
+      const bucketedReading: BucketedReading = {
+        bucketStart: bucket.bucketStart,
+        bucketEnd: new Date(bucket.bucketStart.getTime() + intervalMs),
+        avgValue,
+        minValue: Math.min(...bucket.readings),
+        maxValue: Math.max(...bucket.readings),
+        count: bucket.readings.length,
+        readings: bucket.readings,
+      };
+
+      // 1. Persist to local storage (best-effort, non-blocking)
+      storageService.appendReading(bucketedReading).catch(err =>
+        console.error('[Storage] Error saving bucket:', err)
+      );
+
+      // 2. Send to backend
+      try {
+        await apiService.ingestData({
+          macAddress: device.id,
+          timestamp: bucketedReading.bucketStart.toISOString(),
+          measurementType: 'PM2.5(ATM)',
+          value: avgValue,
+          unit: 'ug/m3',
+        }, tok);
+
+        console.log('[Bucket Flush] Successfully sent to backend');
+
+        // FIX C3: Only clear the bucket AFTER the API call succeeds.
+        // If ingestData threw, we skip this line and the bucket survives
+        // for the next flush check 30 s later — automatic retry.
+        currentBucketRef.current = null;
+      } catch (err) {
+        console.error('[API] Ingest error (bucket preserved for retry):', err);
+        // Bucket is NOT nulled — it will be retried on the next interval tick
+      }
+    }, 30000); // check every 30 s
+
+    return () => clearInterval(flushInterval);
+  }, []); // empty deps — runs once, reads everything via refs
+
+
+  // Scans for both BLE and Classic Bluetooth devices and populates the picker list
   const scanForDevices = async () => {
     if (!bleManagerRef.current) {
       Alert.alert('Error', 'Bluetooth not initialized');
       return;
     }
 
-    // Check if Bluetooth is powered on
     if (bleState !== State.PoweredOn) {
       Alert.alert(
         'Bluetooth Unavailable',
@@ -274,10 +376,7 @@ function MainApp() {
               }
             },
           },
-          {
-            text: 'Cancel',
-            style: 'cancel',
-          },
+          { text: 'Cancel', style: 'cancel' },
         ]
       );
       return;
@@ -289,7 +388,7 @@ function MainApp() {
     const foundDevices = new Map();
 
     try {
-      // Scan for BLE devices
+      // BLE scan — callback fires per advertisement received
       bleManagerRef.current.startDeviceScan(null, null, (error, device) => {
         if (error) {
           console.log('[BLE] Scan Error:', error.message);
@@ -301,26 +400,20 @@ function MainApp() {
         if (device && device.name && !foundDevices.has(device.id)) {
           console.log('[BLE] Found device:', device.name, device.id);
           foundDevices.set(device.id, {
-            id: device.id,
-            name: device.name,
-            type: 'BLE',
-            rawDevice: device,
+            id: device.id, name: device.name, type: 'BLE', rawDevice: device,
           });
           setDevices(Array.from(foundDevices.values()));
         }
       });
 
-      // Scan for Classic Bluetooth devices
+      // Also list already-paired Classic Bluetooth devices
       try {
         const paired = await RNBluetoothClassic.getBondedDevices();
         console.log('[Classic BT] Found', paired.length, 'paired devices');
         paired.forEach((device) => {
           if (!foundDevices.has(device.address)) {
             foundDevices.set(device.address, {
-              id: device.address,
-              name: device.name || 'Unknown Device',
-              type: 'Classic',
-              rawDevice: device,
+              id: device.address, name: device.name || 'Unknown Device', type: 'Classic', rawDevice: device,
             });
           }
         });
@@ -333,7 +426,7 @@ function MainApp() {
       Alert.alert('Scan Failed', 'Could not scan for devices');
     }
 
-    // Stop scanning after 10 seconds
+    // Auto-stop after 10 s to conserve battery
     setTimeout(() => {
       if (bleManagerRef.current) {
         bleManagerRef.current.stopDeviceScan();
@@ -343,6 +436,7 @@ function MainApp() {
     }, 10000);
   };
 
+  // Connects to a BLE or Classic device and starts the data stream
   const connectToDevice = async (deviceInfo: any) => {
     if (!bleManagerRef.current) {
       Alert.alert('Error', 'Bluetooth not initialized');
@@ -350,87 +444,93 @@ function MainApp() {
     }
 
     try {
-      console.log('[Connect] Connecting to:', deviceInfo.name, deviceInfo.type);
       setBtStatus('connecting');
       bleManagerRef.current.stopDeviceScan();
 
-      if (deviceInfo.type === 'BLE') {
-        // Connect to BLE device
-        const device = await bleManagerRef.current.connectToDevice(deviceInfo.rawDevice.id);
-        console.log('[BLE] Connected to device');
+      const now = new Date(); // Initial timestamp for both types
 
+      if (deviceInfo.type === 'BLE') {
+        // ---- BLE CONNECTION ----
+        const device = await bleManagerRef.current.connectToDevice(deviceInfo.rawDevice.id);
         await device.discoverAllServicesAndCharacteristics();
-        console.log('[BLE] Services discovered');
 
         setConnectedDevice(device);
         connectedDeviceType.current = 'BLE';
         setBtStatus('connected');
         setDeviceModalVisible(false);
-        setLastDataTime(new Date());
+        
+        // FIX: Synchronize State and Ref immediately on connection
+        setLastDataTime(now);
+        lastDataTimeRef.current = now; 
+
+        await registerDeviceWithBackend(device.id);
 
         bleSubscription.current = device.monitorCharacteristicForService(
           SERVICE_UUID,
           CHARACTERISTIC_UUID,
           (error, characteristic) => {
-            if (error) {
-              console.log('[BLE] Monitor Error:', error.message);
-              return;
-            }
+            if (error) return;
             if (characteristic?.value) {
               const rawData = Buffer.from(characteristic.value, 'base64').toString('utf-8');
-              parseData(rawData);
-              setLastDataTime(new Date());
+
+              const success = parseDataRef.current(rawData);
+              if (success) {
+                const nowData = new Date();
+                // FIX: Update Ref inside the callback to satisfy Watchdog
+                setLastDataTime(nowData);
+                lastDataTimeRef.current = nowData; 
+              }
             }
           }
         );
 
-        Alert.alert('Success', `Connected to ${deviceInfo.name} (BLE)`);
+        Alert.alert('Success', `Connected to ${deviceInfo.name}`);
+
       } else {
-        // Connect to Classic Bluetooth device
+        // ---- CLASSIC BLUETOOTH CONNECTION ----
         const device = await RNBluetoothClassic.connectToDevice(deviceInfo.rawDevice.address);
-        console.log('[Classic BT] Connected to device');
 
         setConnectedDevice(device);
         connectedDeviceType.current = 'Classic';
         setBtStatus('connected');
         setDeviceModalVisible(false);
-        setLastDataTime(new Date());
+        
+        // FIX: Synchronize State and Ref immediately on connection
+        setLastDataTime(now);
+        lastDataTimeRef.current = now;
 
-        // Read data periodically from Classic Bluetooth
+        // Poll Classic BT every 500ms — faster polling prevents buffer overflow
         classicReadInterval.current = setInterval(async () => {
           try {
             const available = await device.available();
             if (available > 0) {
               const data = await device.read();
-              parseData(data);
-              setLastDataTime(new Date());
+              const success = parseDataRef.current(data);
+              if (success) {
+                const nowData = new Date();
+                // FIX: Update Ref inside the callback to satisfy Watchdog
+                setLastDataTime(nowData);
+                lastDataTimeRef.current = nowData;
+              }
             }
-          } catch (error) {
-            console.log('[Classic BT] Read Error:', error);
-          }
-        }, 1000);
+          } catch (error) {}
+        }, 500);
 
-        Alert.alert('Success', `Connected to ${deviceInfo.name} (Classic)`);
+        Alert.alert('Success', `Connected to ${deviceInfo.name}`);
       }
     } catch (error: any) {
-      console.error('[Connect] Error:', error);
       setBtStatus('disconnected');
-
-      let errorMessage = 'Could not connect to device';
-      if (error.message) {
-        errorMessage = error.message;
-      }
-
-      Alert.alert('Connection Failed', errorMessage);
+      Alert.alert('Connection Failed', error.message || 'Could not connect to device');
     }
   };
 
+  // Disconnects the active device, flushes any pending bucket, and tears down subscriptions
   const disconnectDevice = async () => {
     if (connectedDevice) {
       try {
         console.log('[Disconnect] Disconnecting...');
 
-        // NEW: Save any pending bucket before disconnecting
+        // Save any partially-filled bucket so no data is lost on disconnect
         if (currentBucketRef.current && currentBucketRef.current.readings.length > 0) {
           const intervalMs = 5 * 60 * 1000;
           const prevBucket = currentBucketRef.current;
@@ -447,11 +547,11 @@ function MainApp() {
           };
 
           await storageService.appendReading(bucketedReading);
-          console.log('[Disconnect] Saved pending bucket');
+          console.log('[Disconnect] Saved pending bucket to local storage');
         }
 
-        // NEW: Clear the bucket reference
         currentBucketRef.current = null;
+        noDataAlertShownRef.current = false;
 
         if (bleSubscription.current) {
           bleSubscription.current.remove();
@@ -485,76 +585,210 @@ function MainApp() {
     }
   };
 
-  // UPDATED: parseData function with 5-minute bucketing
-  const parseData = (rawData: string) => {
-    const match = rawData.match(/PM2\.5\(ATM\):\s*([\d.]+)\s*ug\/m3/);
+  // Parses a raw serial chunk, extracts the PM2.5 value, and accumulates it into
+  // the current 5-minute bucket.  Returns true on successful extraction.
+  //
+  // FIX C2: This function no longer sends completed buckets to the backend.
+  //         That responsibility belongs exclusively to the flushInterval above,
+  //         eliminating the duplicate-send race condition.
+ 
+ 
+  // const parseData = (rawData: string): boolean => {
+  //   dataBufferRef.current += rawData;
+
+  //   console.log('[Data] 🔥 Raw received:', rawData);
+  //   console.log('[Data] 📦 Buffer:', dataBufferRef.current);
+
+  //   let val: number | null = null;
+  //   let match: RegExpMatchArray | null = null;
+
+  //   // Pattern 1 (most specific): "PM2.5(ATM): 123.45 ug/m3"
+  //   match = dataBufferRef.current.match(/PM2\.5\(ATM\):\s*([\d.]+)\s*ug\/m3/i);
+  //   if (match) {
+  //     val = parseFloat(match[1]);
+  //     console.log('[Data] ✅ Pattern 1 matched (Full format)');
+  //   }
+
+  //   // Pattern 2: "PM2.5: 123.45"
+  //   if (val === null) {
+  //     match = dataBufferRef.current.match(/PM2\.5\s*:\s*([\d.]+)/i);
+  //     if (match) {
+  //       val = parseFloat(match[1]);
+  //       console.log('[Data] ✅ Pattern 2 matched (PM2.5: XXX)');
+  //     }
+  //   }
+
+  //   // Pattern 3: "PM25: 123.45"
+  //   if (val === null) {
+  //     match = dataBufferRef.current.match(/PM25\s*:\s*([\d.]+)/i);
+  //     if (match) {
+  //       val = parseFloat(match[1]);
+  //       console.log('[Data] ✅ Pattern 3 matched (PM25: XXX)');
+  //     }
+  //   }
+
+  //   // Pattern 4 (least specific): bare number — only if buffer has no letters
+  //   // (guards against parseFloat greedily extracting a number from a partial named message)
+  //   if (val === null) {
+  //     const trimmed = dataBufferRef.current.trim();
+  //     if (!/[a-zA-Z]/.test(trimmed)) {
+  //       const numValue = parseFloat(trimmed);
+  //       if (!isNaN(numValue) && numValue >= 0 && numValue < 1000) {
+  //         val = numValue;
+  //         console.log('[Data] ✅ Pattern 4 matched (Number only)');
+  //       }
+  //     }
+  //   }
+
+  //   if (val !== null && !isNaN(val)) {
+  //     const parsedValue: number = val; // narrow type for use inside closures
+  //     console.log('[Data] ✅✅✅ SUCCESS! Parsed value:', parsedValue);
+  //     const now = new Date();
+  //     dataBufferRef.current = ''; // message fully consumed
+
+  //     // Fresh data arrived — reset the "no data" alert lock
+  //     noDataAlertShownRef.current = false;
+
+  //     // --- 5-minute bucket accumulation ---
+  //     const intervalMs = 1 * 60 * 1000; //debugging-1
+  //     const bucketTime = Math.floor(now.getTime() / intervalMs) * intervalMs;
+  //     const bucketStart = new Date(bucketTime);
+
+  //     if (!currentBucketRef.current || currentBucketRef.current.bucketStart.getTime() !== bucketTime) {
+  //       // We've crossed into a new 5-min window.
+  //       // FIX C2: Do NOT send the previous bucket here.  The flushInterval handles all sends.
+  //       if (currentBucketRef.current && currentBucketRef.current.readings.length > 0) {
+  //         console.log('[Bucket] Boundary crossed. Previous bucket has',
+  //           currentBucketRef.current.readings.length,
+  //           'readings — flushInterval will send it.');
+  //       }
+
+  //       // Start a fresh bucket for the new window
+  //       currentBucketRef.current = {
+  //         bucketStart,
+  //         readings: [parsedValue],
+  //       };
+  //       console.log('[Bucket] Created new bucket at', bucketStart.toISOString());
+  //     } else {
+  //       // Same window — just append
+  //       currentBucketRef.current.readings.push(parsedValue);
+  //       console.log('[Bucket] Added reading. Total in bucket:', currentBucketRef.current.readings.length);
+  //     }
+
+  //     // Push to the live UI (capped at 500 rows)
+  //     setReadings((prev) => {
+  //       const next = [...prev, { ts: now, value: parsedValue }];
+  //       const limited = next.length > 500 ? next.slice(-500) : next;
+  //       console.log('[UI] ✅✅✅ Added to live feed. Total:', limited.length);
+  //       return limited;
+  //     });
+
+  //     return true;
+  //   } else {
+  //     console.log('[Data] ❌ NO MATCH. Buffer:', dataBufferRef.current);
+  //     console.log('[Data] Buffer hex:', Buffer.from(dataBufferRef.current).toString('hex'));
+  //   }
+
+  //   // Safety valve: corrupt buffer cleared after 200 chars
+  //   if (dataBufferRef.current.length > 200) {
+  //     console.log('[Data] ⚠️ Buffer overflow, clearing');
+  //     dataBufferRef.current = '';
+  //   }
+
+  //   return false;
+  // };
+  // const parseData = (rawData: string): boolean => {
+  //   dataBufferRef.current += rawData;
+    
+  //   // 1. Loose regex to find the number and ignore label clutter
+  //   const match = dataBufferRef.current.match(/(\d+\.?\d*)/);
+  
+  //   if (match) {
+  //     const val = parseFloat(match[1]);
+  //     if (!isNaN(val) && val >= 0 && val < 1000) {
+  //       const now = new Date();
+        
+  //       // 2. CRITICAL: Reset the watchdog timer immediately
+  //       setLastDataTime(now); 
+  //       noDataAlertShownRef.current = false;
+  //       dataBufferRef.current = ''; 
+  
+  //       // 3. 1-Minute Ingestion Logic for debugging
+  //       const intervalMs = 1 * 60 * 1000; 
+  //       const bucketTime = Math.floor(now.getTime() / intervalMs) * intervalMs;
+  //       const bucketStart = new Date(bucketTime);
+  
+  //       if (!currentBucketRef.current || currentBucketRef.current.bucketStart.getTime() !== bucketTime) {
+  //         currentBucketRef.current = { bucketStart, readings: [val] };
+  //       } else {
+  //         currentBucketRef.current.readings.push(val);
+  //       }
+  
+  //       // 4. Constant Flow: Maintain 500 readings for the live feed
+  //       setReadings((prev) => {
+  //         const next = [...prev, { ts: now, value: val }];
+  //         // Automatically discards old rows to keep the feed moving constantly
+  //         return next.length > 200 ? next.slice(-200) : next; 
+  //       });
+  
+  //       return true;
+  //     }
+  //   }
+  
+  //   // 5. Clutter Control: Clear buffer quickly if no number is found
+  //   if (dataBufferRef.current.length > 20) {
+  //     dataBufferRef.current = '';
+  //   }
+  
+  //   return false;
+  // };
+
+  const parseData = (rawData: string): boolean => {
+    dataBufferRef.current += rawData;
+    const match = dataBufferRef.current.match(/(\d+\.?\d*)/);
+  
     if (match) {
       const val = parseFloat(match[1]);
-      const now = new Date();
-      console.log('[Data] Received PM2.5:', val);
-
-      // Get 5-minute bucket start time
-      const intervalMs = 5 * 60 * 1000; // 5 minutes
-      const bucketTime = Math.floor(now.getTime() / intervalMs) * intervalMs;
-      const bucketStart = new Date(bucketTime);
-
-      // Check if we need a new bucket
-      if (!currentBucketRef.current ||
-        currentBucketRef.current.bucketStart.getTime() !== bucketTime) {
-
-        // Save previous bucket if exists
-        if (currentBucketRef.current && currentBucketRef.current.readings.length > 0) {
-          const prevBucket = currentBucketRef.current;
-          const avgValue = prevBucket.readings.reduce((a, b) => a + b, 0) / prevBucket.readings.length;
-
-          const bucketedReading: BucketedReading = {
-            bucketStart: prevBucket.bucketStart,
-            bucketEnd: new Date(prevBucket.bucketStart.getTime() + intervalMs),
-            avgValue,
-            minValue: Math.min(...prevBucket.readings),
-            maxValue: Math.max(...prevBucket.readings),
-            count: prevBucket.readings.length,
-            readings: prevBucket.readings,
-          };
-
-          // Save to AsyncStorage
-          storageService.appendReading(bucketedReading).catch(err =>
-            console.error('[Storage] Error saving bucket:', err)
-          );
-
-          // Optionally sync to backend
-          if (token && connectedDevice) {
-            apiService.ingestData({
-              deviceId: connectedDevice.id,
-              timestamp: bucketedReading.bucketStart.toISOString(),
-              pm25: bucketedReading.avgValue,
-              metadata: {
-                min: bucketedReading.minValue,
-                max: bucketedReading.maxValue,
-                count: bucketedReading.count,
-              },
-            }).catch(err => console.error('[API] Ingest error:', err));
-          }
+      if (!isNaN(val) && val >= 0 && val < 1000) {
+        const now = new Date();
+        
+        // FIX 1: Update BOTH State and Ref to satisfy the Watchdog timer
+        setLastDataTime(now); 
+        lastDataTimeRef.current = now; 
+        noDataAlertShownRef.current = false;
+        dataBufferRef.current = ''; 
+  
+        // 1-Minute Ingestion Logic
+        const intervalMs = 1 * 60 * 1000; 
+        const bucketTime = Math.floor(now.getTime() / intervalMs) * intervalMs;
+        const bucketStart = new Date(bucketTime);
+  
+        if (!currentBucketRef.current || currentBucketRef.current.bucketStart.getTime() !== bucketTime) {
+          currentBucketRef.current = { bucketStart, readings: [val] };
+        } else {
+          currentBucketRef.current.readings.push(val);
         }
-
-        // Start new bucket
-        currentBucketRef.current = {
-          bucketStart,
-          readings: [val],
-        };
-      } else {
-        // Add to current bucket
-        currentBucketRef.current.readings.push(val);
+  
+        // UI Update: Constant flow limited to 200
+        setReadings((prev) => {
+          const next = [...prev, { ts: now, value: val }];
+          return next.length > 200 ? next.slice(-200) : next; 
+        });
+  
+        return true;
       }
-
-      // Still update live readings for UI
-      setReadings((prev) => {
-        const next = [...prev, { ts: now, value: val }];
-        return next.length > 500 ? next.slice(-500) : next;
-      });
     }
+  
+    if (dataBufferRef.current.length > 20) {
+      dataBufferRef.current = '';
+    }
+    return false;
   };
+  
+  // Keep the ref in sync so BLE/Classic callbacks always call the current version
+  parseDataRef.current = parseData;
 
+  // Opens the device modal or prompts to disconnect if already connected
   const openDeviceModal = () => {
     if (btStatus === 'connected') {
       Alert.alert(
@@ -574,6 +808,7 @@ function MainApp() {
   const latest = readings.length ? readings[readings.length - 1] : undefined;
   const isConnected = btStatus === 'connected';
 
+  // Badge colours and labels driven by connection state
   const btBadge = {
     text: btStatus === 'connected' ? 'Connected' : btStatus === 'connecting' ? 'Connecting' : 'Disconnected',
     color: btStatus === 'connected' ? '#22c55e' : btStatus === 'connecting' ? '#eab308' : '#ef4444',
@@ -590,40 +825,27 @@ function MainApp() {
         <TouchableOpacity onPress={() => setMenuOpen(true)} style={styles.headerButton}>
           <Icon name="menu" size={24} color="#a1a1aa" />
         </TouchableOpacity>
-
         <TouchableOpacity onPress={() => setActiveTab('live')}>
           <Text style={styles.headerTitle}>Shudhvayu</Text>
         </TouchableOpacity>
-
-        <BluetoothIcon
-          isActive={btStatus === 'connected'}
-          size={40}
-          onPress={openDeviceModal}
-        />
+        <BluetoothIcon isActive={btStatus === 'connected'} size={40} onPress={openDeviceModal} />
       </View>
 
-      {/* Tab Selector - Only show for Live and AQI tabs */}
+      {/* Tab Selector */}
       {(activeTab === 'live' || activeTab === 'aqi') && (
         <View style={styles.tabContainer}>
           <View style={styles.tabInner}>
-            <TouchableOpacity
-              onPress={() => setActiveTab('live')}
-              style={[styles.tab, activeTab === 'live' && styles.tabActive]}>
-              <Icon name="activity" size={16} color={activeTab === 'live' ? '#18181b' : '#d4d4d8'} />
+            <TouchableOpacity onPress={() => setActiveTab('live')} style={[styles.tab, activeTab === 'live' && styles.tabActive]}>
               <Text style={[styles.tabText, activeTab === 'live' && styles.tabTextActive]}>Live PM2.5</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => setActiveTab('aqi')}
-              style={[styles.tab, activeTab === 'aqi' && styles.tabActive]}>
-              <Icon name="wind" size={16} color={activeTab === 'aqi' ? '#18181b' : '#d4d4d8'} />
+            <TouchableOpacity onPress={() => setActiveTab('aqi')} style={[styles.tab, activeTab === 'aqi' && styles.tabActive]}>
               <Text style={[styles.tabText, activeTab === 'aqi' && styles.tabTextActive]}>AQI Report</Text>
             </TouchableOpacity>
           </View>
         </View>
       )}
 
-      {/* Menu Modal */}
+      {/* Side Menu */}
       <Modal visible={menuOpen} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
           <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setMenuOpen(false)} />
@@ -637,45 +859,23 @@ function MainApp() {
                 <Icon name="x" size={24} color="#a1a1aa" />
               </TouchableOpacity>
             </View>
-
             <ScrollView style={styles.menuItems}>
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => {
-                  setActiveTab('profile');
-                  setMenuOpen(false);
-                }}>
-                <Icon name="user" size={20} color="#d4d4d8" />
+              <TouchableOpacity style={styles.menuItem} onPress={() => { setActiveTab('profile'); setMenuOpen(false); }}>
                 <Text style={styles.menuItemText}>Profile</Text>
               </TouchableOpacity>
-
               <TouchableOpacity style={styles.menuItem} onPress={() => Linking.openURL('https://shudhvayu.com/about')}>
-                <Icon name="info" size={20} color="#d4d4d8" />
                 <Text style={styles.menuItemText}>About Us</Text>
               </TouchableOpacity>
-
               <TouchableOpacity style={styles.menuItem} onPress={() => Linking.openURL('https://shudhvayu.com/privacy')}>
-                <Icon name="shield" size={20} color="#d4d4d8" />
                 <Text style={styles.menuItemText}>Privacy & Security</Text>
               </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.menuItem}
-                onPress={() => {
-                  setActiveTab('support');
-                  setMenuOpen(false);
-                }}>
-                <Icon name="bell" size={20} color="#d4d4d8" />
+              <TouchableOpacity style={styles.menuItem} onPress={() => { setActiveTab('support'); setMenuOpen(false); }}>
                 <Text style={styles.menuItemText}>Support</Text>
               </TouchableOpacity>
-
               <TouchableOpacity style={styles.menuItem} onPress={() => Linking.openURL('https://shudhvayu.com/terms')}>
-                <Icon name="info" size={20} color="#d4d4d8" />
                 <Text style={styles.menuItemText}>Terms of Services</Text>
               </TouchableOpacity>
-
               <TouchableOpacity style={[styles.menuItem, styles.logoutItem]} onPress={logout}>
-                <Icon name="logout" size={20} color="#f87171" />
                 <Text style={styles.logoutText}>Logout</Text>
               </TouchableOpacity>
             </ScrollView>
@@ -683,12 +883,11 @@ function MainApp() {
         </View>
       </Modal>
 
-      {/* Device Selection Modal */}
+      {/* Device Selection Bottom Sheet */}
       <Modal visible={deviceModalVisible} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.deviceModalContent}>
             <Text style={styles.deviceModalTitle}>Select Bluetooth Device</Text>
-
             <View style={styles.deviceListContainer}>
               {scanning ? (
                 <View style={styles.scanningContainer}>
@@ -715,27 +914,21 @@ function MainApp() {
                 />
               )}
             </View>
-
             <TouchableOpacity style={styles.refreshBtn} onPress={scanForDevices} disabled={scanning}>
               <Text style={styles.refreshBtnText}>{scanning ? 'Scanning...' : '🔄 Refresh'}</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.closeBtn}
-              onPress={() => {
-                if (bleManagerRef.current) {
-                  bleManagerRef.current.stopDeviceScan();
-                }
-                setDeviceModalVisible(false);
-              }}>
+            <TouchableOpacity style={styles.closeBtn} onPress={() => {
+              if (bleManagerRef.current) bleManagerRef.current.stopDeviceScan();
+              setDeviceModalVisible(false);
+            }}>
               <Text style={styles.closeBtnText}>Close</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-            {/* Content */}
-            <ScrollView style={styles.content}>
+      {/* Main Content */}
+      <ScrollView style={styles.content}>
         {activeTab === 'live' && (
           <LiveFeedScreen
             btStatus={btStatus}
@@ -744,16 +937,22 @@ function MainApp() {
             isConnected={isConnected}
             btBadge={btBadge}
             pulseAnim={pulseAnim}
+            scrollViewRef={scrollViewRef}
             connectedDeviceId={connectedDevice?.id}
           />
         )}
 
-        {activeTab === 'aqi' && <AqiReportScreen readings={readings} />}
-
+        {/* Dummy device id for fallback  */}
+        {activeTab === 'aqi' && (
+          <AqiReportScreen
+            readings={readings}
+            deviceId={connectedDevice?.id || '90:15:06:7C:2D:8A'}
+            // deviceId={connectedDevice?.id || '6943fa46f429c94f71aa8df4'} // for checking dummy data
+          />
+        )}
         {activeTab === 'profile' && (
           <ProfileScreen onBackPress={() => setActiveTab('live')} />
         )}
-
         {activeTab === 'support' && (
           <SupportScreen onBackPress={() => setActiveTab('live')} />
         )}
@@ -762,7 +961,7 @@ function MainApp() {
   );
 }
 
-// Root components that handle auth
+// Root wrapper — provides auth context to the whole tree
 export default function App() {
   return (
     <AuthProvider>
@@ -771,6 +970,7 @@ export default function App() {
   );
 }
 
+// Renders LoginScreen or MainApp based on authentication state
 function AppContent() {
   const { isAuthenticated, loading } = useAuth();
 
@@ -790,236 +990,45 @@ function AppContent() {
   return <MainApp />;
 }
 
-// COMPLETE STYLES
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#18181b',
-  },
-  loadingContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: '#18181b',
-  },
-  loadingText: {
-    color: '#fff',
-    marginTop: 16,
-    fontSize: 16,
-  },
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#27272a',
-  },
-  headerButton: {
-    padding: 4,
-  },
-  headerTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#fff',
-  },
-  tabContainer: {
-    alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#27272a',
-  },
-  tabInner: {
-    flexDirection: 'row',
-    backgroundColor: '#27272a',
-    padding: 4,
-    borderRadius: 24,
-    borderWidth: 1,
-    borderColor: '#3f3f46',
-  },
-  tab: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    marginHorizontal: 2,
-  },
-  tabActive: {
-    backgroundColor: '#fff',
-  },
-  tabText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#d4d4d8',
-    marginLeft: 8,
-  },
-  tabTextActive: {
-    color: '#18181b',
-  },
-  modalOverlay: {
-    flex: 1,
-  },
-  modalBackdrop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-  menu: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    bottom: 0,
-    width: 280,
-    backgroundColor: '#27272a',
-  },
-  menuHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#3f3f46',
-  },
-  menuTitle: {
-    fontSize: 20,
-    fontWeight: '600',
-    color: '#fff',
-  },
-  menuSubtitle: {
-    fontSize: 14,
-    color: '#a1a1aa',
-    marginTop: 4,
-  },
-  menuItems: {
-    flex: 1,
-  },
-  menuItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#3f3f46',
-  },
-  menuItemText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#d4d4d8',
-    marginLeft: 12,
-  },
-  logoutItem: {
-    borderTopWidth: 1,
-    borderTopColor: '#3f3f46',
-  },
-  logoutText: {
-    fontSize: 14,
-    fontWeight: '500',
-    color: '#f87171',
-    marginLeft: 12,
-  },
-  content: {
-    flex: 1,
-  },
-  // Device Modal Styles
-  deviceModalContent: {
-    position: 'absolute',
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: '#27272a',
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    padding: 20,
-    maxHeight: '80%',
-  },
-  deviceModalTitle: {
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: '#fff',
-    marginBottom: 16,
-    textAlign: 'center',
-  },
-  deviceListContainer: {
-    maxHeight: 300,
-    marginBottom: 16,
-  },
-  scanningContainer: {
-    alignItems: 'center',
-    padding: 20,
-  },
-  scanningText: {
-    textAlign: 'center',
-    fontSize: 14,
-    color: '#a1a1aa',
-    marginTop: 12,
-  },
-  noDevicesText: {
-    textAlign: 'center',
-    fontSize: 14,
-    color: '#71717a',
-    padding: 20,
-  },
-  deviceItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#3f3f46',
-    backgroundColor: '#18181b',
-    marginBottom: 8,
-    borderRadius: 8,
-  },
-  deviceInfo: {
-    flex: 1,
-  },
-  deviceName: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#fff',
-    marginBottom: 4,
-  },
-  deviceId: {
-    fontSize: 12,
-    color: '#a1a1aa',
-  },
-  deviceTypeBadge: {
-    backgroundColor: '#3b82f6',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  deviceTypeText: {
-    fontSize: 11,
-    color: '#fff',
-    fontWeight: '600',
-  },
-  refreshBtn: {
-    backgroundColor: '#22c55e',
-    padding: 14,
-    borderRadius: 8,
-    marginBottom: 10,
-  },
-  refreshBtnText: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  closeBtn: {
-    backgroundColor: '#3f3f46',
-    padding: 14,
-    borderRadius: 8,
-  },
-  closeBtnText: {
-    color: '#e4e4e7',
-    fontSize: 16,
-    fontWeight: '500',
-    textAlign: 'center',
-  },
+  container: { flex: 1, backgroundColor: '#18181b' },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#18181b' },
+  loadingText: { color: '#fff', marginTop: 16, fontSize: 16 },
+  header: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#27272a' },
+  headerButton: { padding: 4 },
+  headerTitle: { fontSize: 18, fontWeight: 'bold', color: '#fff' },
+  tabContainer: { alignItems: 'center', paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#27272a' },
+  tabInner: { flexDirection: 'row', backgroundColor: '#27272a', padding: 4, borderRadius: 24, borderWidth: 1, borderColor: '#3f3f46' },
+  tab: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 8, borderRadius: 20, marginHorizontal: 2 },
+  tabActive: { backgroundColor: '#fff' },
+  tabText: { fontSize: 14, fontWeight: '500', color: '#d4d4d8', marginLeft: 8 },
+  tabTextActive: { color: '#18181b' },
+  modalOverlay: { flex: 1 },
+  modalBackdrop: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)' },
+  menu: { position: 'absolute', top: 0, left: 0, bottom: 0, width: 280, backgroundColor: '#27272a' },
+  menuHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, borderBottomWidth: 1, borderBottomColor: '#3f3f46' },
+  menuTitle: { fontSize: 20, fontWeight: '600', color: '#fff' },
+  menuSubtitle: { fontSize: 14, color: '#a1a1aa', marginTop: 4 },
+  menuItems: { flex: 1 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#3f3f46' },
+  menuItemText: { fontSize: 14, fontWeight: '500', color: '#d4d4d8', marginLeft: 12 },
+  logoutItem: { borderTopWidth: 1, borderTopColor: '#3f3f46' },
+  logoutText: { fontSize: 14, fontWeight: '500', color: '#f87171', marginLeft: 12 },
+  content: { flex: 1 },
+  deviceModalContent: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#27272a', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '80%' },
+  deviceModalTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff', marginBottom: 16, textAlign: 'center' },
+  deviceListContainer: { maxHeight: 300, marginBottom: 16 },
+  scanningContainer: { alignItems: 'center', padding: 20 },
+  scanningText: { textAlign: 'center', fontSize: 14, color: '#a1a1aa', marginTop: 12 },
+  noDevicesText: { textAlign: 'center', fontSize: 14, color: '#71717a', padding: 20 },
+  deviceItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 16, borderBottomWidth: 1, borderBottomColor: '#3f3f46', backgroundColor: '#18181b', marginBottom: 8, borderRadius: 8 },
+  deviceInfo: { flex: 1 },
+  deviceName: { fontSize: 16, fontWeight: '600', color: '#fff', marginBottom: 4 },
+  deviceId: { fontSize: 12, color: '#a1a1aa' },
+  deviceTypeBadge: { backgroundColor: '#3b82f6', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 12 },
+  deviceTypeText: { fontSize: 11, color: '#fff', fontWeight: '600' },
+  refreshBtn: { backgroundColor: '#22c55e', padding: 14, borderRadius: 8, marginBottom: 10 },
+  refreshBtnText: { color: '#fff', fontSize: 16, fontWeight: '600', textAlign: 'center' },
+  closeBtn: { backgroundColor: '#3f3f46', padding: 14, borderRadius: 8 },
+  closeBtnText: { color: '#e4e4e7', fontSize: 16, fontWeight: '500', textAlign: 'center' },
 });
