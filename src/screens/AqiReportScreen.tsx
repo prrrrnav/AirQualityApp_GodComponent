@@ -24,6 +24,7 @@ interface Props {
 export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
   const { token } = useAuth();
 
+  const isPickingRef = useRef(false);
   // 1. Selection State (Temp dates used by the pickers)
   const [startSelection, setStartSelection] = useState<Date | null>(null);
   const [endSelection, setEndSelection] = useState<Date | null>(null);
@@ -46,7 +47,7 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
 
     try {
       setLoading(true);
-      
+
       // Use forced values (for Clear action) or the applied state
       const targetStart = forcedStart !== undefined ? forcedStart : appliedStart;
       const targetEnd = forcedEnd !== undefined ? forcedEnd : appliedEnd;
@@ -67,7 +68,7 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
       const endISO = targetEnd ? formatEndDate(targetEnd) : undefined;
 
       const response = await apiService.getHistory(deviceId, token, startISO, endISO);
-      
+
       const rawData = Array.isArray(response) ? response : (response?.data || []);
 
       if (rawData.length === 0) {
@@ -125,6 +126,31 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
     </View>
   );
 
+  const onStartChange = (event: any, d?: Date) => {
+    if (Platform.OS === 'android') setShowStartPicker(false);
+    
+    if (event.type === 'set' && d) {
+      setStartSelection(d);
+      isPickingRef.current = false; // Release the lock
+    } else {
+      setShowStartPicker(false);
+      isPickingRef.current = false;
+    }
+  };
+
+  // HANDLER: Optimized End Date
+  const onEndChange = (event: any, d?: Date) => {
+    if (Platform.OS === 'android') setShowEndPicker(false);
+    
+    if (event.type === 'set' && d) {
+      setEndSelection(d);
+      isPickingRef.current = false;
+    } else {
+      setShowEndPicker(false);
+      isPickingRef.current = false;
+    }
+  };
+  
   return (
     <View style={styles.pageContainer}>
       <View style={styles.aqiHeaderContainer}>
@@ -137,16 +163,34 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
           <View style={styles.filterRow}>
             <View style={styles.filterGroup}>
               <Text style={styles.filterLabel}>START DATE</Text>
-              <TouchableOpacity style={styles.dateButton} onPress={() => setShowStartPicker(true)}>
-                <Text style={styles.dateButtonText}>{startSelection ? fmtDate(startSelection) : 'Select'}</Text>
+              <TouchableOpacity 
+                style={styles.dateButton} 
+                onPress={() => {
+                  // Explicitly set focus lock before showing picker
+                  setShowStartPicker(true);
+                }}
+              >
+                <Text style={styles.dateButtonText}>
+                  {startSelection ? fmtDate(startSelection) : 'Select Start'}
+                </Text>
               </TouchableOpacity>
+
               {showStartPicker && (
                 <DateTimePicker
+                  // Tie value strictly to startSelection state or fallback to today once
                   value={startSelection || new Date()}
                   mode="date"
-                  onChange={(e, d) => {
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  maximumDate={new Date()} 
+                  onChange={(event, d) => {
+                    // Close picker first on Android to avoid UI collision
                     if (Platform.OS === 'android') setShowStartPicker(false);
-                    if (d) setStartSelection(d);
+
+                    if (event.type === 'set' && d) {
+                      setStartSelection(d);
+                    } else if (event.type === 'dismissed') {
+                      setShowStartPicker(false);
+                    }
                   }}
                 />
               )}
@@ -154,16 +198,31 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
 
             <View style={styles.filterGroup}>
               <Text style={styles.filterLabel}>END DATE</Text>
-              <TouchableOpacity style={styles.dateButton} onPress={() => setShowEndPicker(true)}>
-                <Text style={styles.dateButtonText}>{endSelection ? fmtDate(endSelection) : 'Select'}</Text>
+              <TouchableOpacity 
+                style={styles.dateButton} 
+                onPress={() => {
+                  setShowEndPicker(true);
+                }}
+              >
+                <Text style={styles.dateButtonText}>
+                  {endSelection ? fmtDate(endSelection) : 'Select End'}
+                </Text>
               </TouchableOpacity>
+
               {showEndPicker && (
                 <DateTimePicker
                   value={endSelection || new Date()}
                   mode="date"
-                  onChange={(e, d) => {
+                  display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+                  maximumDate={new Date()}
+                  onChange={(event, d) => {
                     if (Platform.OS === 'android') setShowEndPicker(false);
-                    if (d) setEndSelection(d);
+
+                    if (event.type === 'set' && d) {
+                      setEndSelection(d);
+                    } else if (event.type === 'dismissed') {
+                      setShowEndPicker(false);
+                    }
                   }}
                 />
               )}
@@ -192,7 +251,10 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
           renderItem={renderItem}
           keyExtractor={(item, index) => index.toString()}
           style={styles.tableScroll}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
+          // Optimization: Headers stay at the top of the table
           ListHeaderComponent={() => (
             <View style={styles.tableHeaderRow}>
               <Text style={[styles.tableHeaderCell, styles.col35]}>Date</Text>
@@ -200,16 +262,18 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
               <Text style={[styles.tableHeaderCell, styles.col30]}>Avg PM2.5</Text>
             </View>
           )}
+          stickyHeaderIndices={[0]} // Ensure columns stay visible while scrolling
           ListEmptyComponent={() => (
             <View style={styles.emptyContainer}>
-              <Text style={styles.emptyText}>{loading ? 'Fetching...' : 'No records found for this range.'}</Text>
+              <Text style={styles.emptyText}>
+                {loading ? 'Fetching history...' : 'No records found for this range.'}
+              </Text>
             </View>
           )}
         />
       </View>
     </View>
-  );
-};
+  );};
 
 const styles = StyleSheet.create({
   pageContainer: { padding: 16 },

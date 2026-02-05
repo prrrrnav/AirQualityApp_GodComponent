@@ -182,7 +182,7 @@ async getHistory(deviceId: string, token: string, startDate?: string | null, end
     });
 
     const result = await response.json();
-    console.log('[API] Get history raw response:', JSON.stringify(result, null, 2));
+    // console.log('[API] Get history raw response:', JSON.stringify(result, null, 2));
     
     if (!response.ok) {
       // Backend returns errors with message and statusCode

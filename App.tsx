@@ -1,9 +1,3 @@
-// App.tsx — FIXED VERSION
-// Fixes in this file:
-//   C1 — flushInterval stale closure on connectedDevice/token → read from refs
-//   C2 — duplicate bucket send from parseData AND flushInterval → removed from parseData
-//   C3 — bucket nulled before API resolves (data loss on failure) → null only after success
-
 import { AuthProvider, useAuth } from './src/context/AuthContext';
 import { LoginScreen } from './src/screens/LoginScreen';
 import BluetoothIcon from './src/components/BluetoothIcon';
@@ -46,6 +40,8 @@ const CHARACTERISTIC_UUID = '0000FFE1-0000-1000-8000-00805F9B34FB';
 
 function MainApp() {
   const { logout, token } = useAuth();
+  
+  const IS_MOCK_MODE = true; // Toggle this to false when connecting to the actual device
   const [activeTab, setActiveTab] = useState<string>('live');
   const [menuOpen, setMenuOpen] = useState<boolean>(false);
   const [btStatus, setBtStatus] = useState<'connected' | 'connecting' | 'disconnected'>('disconnected');
@@ -65,6 +61,7 @@ function MainApp() {
   const connectedDeviceType = useRef<'BLE' | 'Classic' | null>(null);
   const bleManagerRef = useRef<BleManager | null>(null);
   const stateSubscriptionRef = useRef<any>(null);
+  const readingsBufferRef = useRef<Reading[]>([]);
 
   // Accumulates raw readings within the current 5-minute window
   const currentBucketRef = useRef<{
@@ -77,6 +74,52 @@ function MainApp() {
   const connectedDeviceRef = useRef<any>(null);
   const tokenRef = useRef<string | null>(null);
 
+
+  useEffect(() => {
+    if (!IS_MOCK_MODE) return;
+
+    setBtStatus('connected');
+    setConnectedDevice({
+      id: '90:15:06:7C:2D:8A', 
+      name: 'Shudhvayu Mock Device'
+    });
+
+    const mockInterval = setInterval(() => {
+      const now = new Date();
+      // Generate the mock value
+      const mockValue = parseFloat((Math.random() * 30 + 15).toFixed(1));
+
+      // 1. Reset Watchdog
+      lastDataTimeRef.current = now;
+      setLastDataTime(now); 
+      noDataAlertShownRef.current = false;
+
+      // 2. Update Live UI Buffer (using unshift for top-sync)
+      readingsBufferRef.current.unshift({ ts: now, value: mockValue });
+      if (readingsBufferRef.current.length > 200) {
+        readingsBufferRef.current.pop();
+      }
+
+      // --- 3. THE INGESTION FIX ---
+      const intervalMs = 1 * 60 * 1000; // 1 Minute window
+      const bucketTime = Math.floor(now.getTime() / intervalMs) * intervalMs;
+      
+      if (!currentBucketRef.current || currentBucketRef.current.bucketStart.getTime() !== bucketTime) {
+        // Start a new bucket for the new minute
+        currentBucketRef.current = { 
+          bucketStart: new Date(bucketTime), 
+          readings: [mockValue] 
+        };
+        console.log(`[Mock Ingestion] New bucket started for: ${new Date(bucketTime).toLocaleTimeString()}`);
+      } else {
+        // Continue adding to the current minute's bucket
+        currentBucketRef.current.readings.push(mockValue);
+      }
+    }, 1000); 
+
+    return () => clearInterval(mockInterval);
+  }, []);
+
   // Keep refs in sync whenever state changes
   useEffect(() => {
     connectedDeviceRef.current = connectedDevice;
@@ -84,6 +127,11 @@ function MainApp() {
 
   useEffect(() => {
     tokenRef.current = token;
+    if (token) {
+      console.log("[Ingestion] ✅ Token sync successful. Ready to ingest.");
+    } else {
+      console.log("[Ingestion] ❌ Waiting for token... Log in again if this persists.");
+    }
   }, [token]);
 
   // Ref that always holds the latest parseData function so that BLE/Classic
@@ -107,17 +155,17 @@ function MainApp() {
   useEffect(() => {
     const initBluetooth = async () => {
       try {
-        console.log('[BLE] Initializing Bluetooth...');
+        // console.log('[BLE] Initializing Bluetooth...');
         await requestPermissions();
 
         if (!bleManagerRef.current) {
           bleManagerRef.current = new BleManager();
-          console.log('[BLE] BLE Manager created');
+          // console.log('[BLE] BLE Manager created');
         }
 
         // Listen for system Bluetooth on/off changes
         stateSubscriptionRef.current = bleManagerRef.current.onStateChange((state) => {
-          console.log('[BLE] State changed:', state);
+          // console.log('[BLE] State changed:', state);
           setBleState(state);
 
           if (state === State.PoweredOff) {
@@ -141,7 +189,7 @@ function MainApp() {
           }
         }, true);
 
-        console.log('[BLE] Initialization complete');
+        // console.log('[BLE] Initialization complete');
       } catch (error) {
         console.error('[BLE] Initialization error:', error);
       }
@@ -176,7 +224,7 @@ function MainApp() {
     if (Platform.OS === 'android') {
       try {
         const apiLevel = Platform.Version;
-        console.log('[Permissions] Android API Level:', apiLevel);
+        // console.log('[Permissions] Android API Level:', apiLevel);
 
         if (apiLevel >= 31) {
           const granted = await PermissionsAndroid.requestMultiple([
@@ -224,13 +272,13 @@ function MainApp() {
   }, [btStatus, pulseAnim]);
 
   // Auto-scrolls the live feed table to the newest row when readings change
-  useEffect(() => {
-    if (scrollViewRef.current && readings.length > 0) {
-      setTimeout(() => {
-        scrollViewRef.current?.scrollToEnd({ animated: true });
-      }, 100);
-    }
-  }, [readings]);
+  // useEffect(() => {
+  //   if (scrollViewRef.current && readings.length > 0) {
+  //     setTimeout(() => {
+  //       scrollViewRef.current?.scrollToEnd({ animated: true });
+  //     }, 100);
+  //   }
+  // }, [readings]);
 
   // Watchdog: alerts once if no data has arrived for >15 s while connected.
   // Reads lastDataTime from a ref (not state) so this effect only mounts/unmounts
@@ -458,10 +506,10 @@ function MainApp() {
         connectedDeviceType.current = 'BLE';
         setBtStatus('connected');
         setDeviceModalVisible(false);
-        
+
         // FIX: Synchronize State and Ref immediately on connection
         setLastDataTime(now);
-        lastDataTimeRef.current = now; 
+        lastDataTimeRef.current = now;
 
         await registerDeviceWithBackend(device.id);
 
@@ -478,7 +526,7 @@ function MainApp() {
                 const nowData = new Date();
                 // FIX: Update Ref inside the callback to satisfy Watchdog
                 setLastDataTime(nowData);
-                lastDataTimeRef.current = nowData; 
+                lastDataTimeRef.current = nowData;
               }
             }
           }
@@ -494,7 +542,7 @@ function MainApp() {
         connectedDeviceType.current = 'Classic';
         setBtStatus('connected');
         setDeviceModalVisible(false);
-        
+
         // FIX: Synchronize State and Ref immediately on connection
         setLastDataTime(now);
         lastDataTimeRef.current = now;
@@ -513,7 +561,7 @@ function MainApp() {
                 lastDataTimeRef.current = nowData;
               }
             }
-          } catch (error) {}
+          } catch (error) { }
         }, 500);
 
         Alert.alert('Success', `Connected to ${deviceInfo.name}`);
@@ -591,8 +639,8 @@ function MainApp() {
   // FIX C2: This function no longer sends completed buckets to the backend.
   //         That responsibility belongs exclusively to the flushInterval above,
   //         eliminating the duplicate-send race condition.
- 
- 
+
+
   // const parseData = (rawData: string): boolean => {
   //   dataBufferRef.current += rawData;
 
@@ -699,92 +747,114 @@ function MainApp() {
   // };
   // const parseData = (rawData: string): boolean => {
   //   dataBufferRef.current += rawData;
-    
+
   //   // 1. Loose regex to find the number and ignore label clutter
   //   const match = dataBufferRef.current.match(/(\d+\.?\d*)/);
-  
+
   //   if (match) {
   //     const val = parseFloat(match[1]);
   //     if (!isNaN(val) && val >= 0 && val < 1000) {
   //       const now = new Date();
-        
+
   //       // 2. CRITICAL: Reset the watchdog timer immediately
   //       setLastDataTime(now); 
   //       noDataAlertShownRef.current = false;
   //       dataBufferRef.current = ''; 
-  
+
   //       // 3. 1-Minute Ingestion Logic for debugging
   //       const intervalMs = 1 * 60 * 1000; 
   //       const bucketTime = Math.floor(now.getTime() / intervalMs) * intervalMs;
   //       const bucketStart = new Date(bucketTime);
-  
+
   //       if (!currentBucketRef.current || currentBucketRef.current.bucketStart.getTime() !== bucketTime) {
   //         currentBucketRef.current = { bucketStart, readings: [val] };
   //       } else {
   //         currentBucketRef.current.readings.push(val);
   //       }
-  
+
   //       // 4. Constant Flow: Maintain 500 readings for the live feed
   //       setReadings((prev) => {
   //         const next = [...prev, { ts: now, value: val }];
   //         // Automatically discards old rows to keep the feed moving constantly
   //         return next.length > 200 ? next.slice(-200) : next; 
   //       });
-  
+
   //       return true;
   //     }
   //   }
-  
+
   //   // 5. Clutter Control: Clear buffer quickly if no number is found
   //   if (dataBufferRef.current.length > 20) {
   //     dataBufferRef.current = '';
   //   }
-  
+
   //   return false;
   // };
 
+  const [debugLogs, setDebugLogs] = useState<string[]>([]);
+
+  // Using a functional update to ensure we never lose logs during rapid data bursts
+  const addDebugLog = (msg: string) => {
+    const time = new Date().toLocaleTimeString().split(' ')[0]; // HH:MM:SS
+    setDebugLogs(prev => [`[${time}] ${msg}`, ...prev].slice(0, 8)); // Keep last 8 logs
+  };
+
   const parseData = (rawData: string): boolean => {
     dataBufferRef.current += rawData;
-    const match = dataBufferRef.current.match(/(\d+\.?\d*)/);
-  
+
+    // Resilient matching
+    const match = dataBufferRef.current.match(/(?:PM2\.5|PM25|ATM)[:\s]+([\d.]+)/i)
+      || dataBufferRef.current.match(/(\d+\.?\d*)/);
+
     if (match) {
       const val = parseFloat(match[1]);
       if (!isNaN(val) && val >= 0 && val < 1000) {
         const now = new Date();
-        
-        // FIX 1: Update BOTH State and Ref to satisfy the Watchdog timer
-        setLastDataTime(now); 
-        lastDataTimeRef.current = now; 
+
+        // Update Watchdog Refs (Non-blocking)
+        lastDataTimeRef.current = now;
         noDataAlertShownRef.current = false;
-        dataBufferRef.current = ''; 
-  
-        // 1-Minute Ingestion Logic
-        const intervalMs = 1 * 60 * 1000; 
+        dataBufferRef.current = '';
+
+        // Update Bucket Ingestion (Non-blocking)
+        const intervalMs = 1 * 60 * 1000;
         const bucketTime = Math.floor(now.getTime() / intervalMs) * intervalMs;
-        const bucketStart = new Date(bucketTime);
-  
         if (!currentBucketRef.current || currentBucketRef.current.bucketStart.getTime() !== bucketTime) {
-          currentBucketRef.current = { bucketStart, readings: [val] };
+          currentBucketRef.current = { bucketStart: new Date(bucketTime), readings: [val] };
         } else {
           currentBucketRef.current.readings.push(val);
         }
-  
-        // UI Update: Constant flow limited to 200
-        setReadings((prev) => {
-          const next = [...prev, { ts: now, value: val }];
-          return next.length > 200 ? next.slice(-200) : next; 
-        });
-  
+
+        // --- CRITICAL CHANGE ---
+        // Instead of setReadings, push to the hidden buffer
+        readingsBufferRef.current.unshift({ ts: now, value: val }); // Add to front
+        if (readingsBufferRef.current.length > 200) {
+          readingsBufferRef.current.pop(); // Remove from back
+        }
+
         return true;
       }
     }
-  
-    if (dataBufferRef.current.length > 20) {
-      dataBufferRef.current = '';
-    }
+
+    if (dataBufferRef.current.length > 50) dataBufferRef.current = '';
     return false;
   };
-  
+
+  // 3. Add this Effect to Sync the UI every 1 second
+  useEffect(() => {
+    const uiSyncInterval = setInterval(() => {
+      // ONLY sync state if we are actually looking at the 'live' tab
+      // This stops the background "noise" from re-rendering the AQI screen
+      if (btStatus === 'connected' && activeTab === 'live' && readingsBufferRef.current.length > 0) {
+        setReadings([...readingsBufferRef.current]);
+      }
+    }, 1000);
+    
+    return () => clearInterval(uiSyncInterval); 
+  }, [btStatus, activeTab]); // Add activeTab as a dependency
+
+
+
   // Keep the ref in sync so BLE/Classic callbacks always call the current version
   parseDataRef.current = parseData;
 
@@ -897,21 +967,25 @@ function MainApp() {
               ) : devices.length === 0 ? (
                 <Text style={styles.noDevicesText}>No devices found. Tap Refresh to scan again.</Text>
               ) : (
-                <FlatList
-                  data={devices}
-                  keyExtractor={(item) => item.id}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity style={styles.deviceItem} onPress={() => connectToDevice(item)}>
-                      <View style={styles.deviceInfo}>
-                        <Text style={styles.deviceName}>{item.name}</Text>
-                        <Text style={styles.deviceId}>{item.id}</Text>
-                      </View>
-                      <View style={styles.deviceTypeBadge}>
-                        <Text style={styles.deviceTypeText}>{item.type}</Text>
-                      </View>
-                    </TouchableOpacity>
-                  )}
-                />
+                <FlatList 
+                data={readings}
+                renderItem={renderItem}
+                keyExtractor={(item, index) => index.toString()}
+                style={styles.tableScroll}
+                
+                // Newest data logic
+                initialNumToRender={15}
+                
+                // Place headers at the top
+                ListHeaderComponent={() => (
+                  <View style={styles.tableHeaderRow}>
+                    <Text style={[styles.tableHeaderCell, styles.col35]}>Date</Text>
+                    <Text style={[styles.tableHeaderCell, styles.col35]}>Time</Text>
+                    <Text style={[styles.tableHeaderCell, styles.col30]}>Value</Text>
+                  </View>
+                )}
+                stickyHeaderIndices={[0]} 
+              />
               )}
             </View>
             <TouchableOpacity style={styles.refreshBtn} onPress={scanForDevices} disabled={scanning}>
@@ -932,13 +1006,13 @@ function MainApp() {
         {activeTab === 'live' && (
           <LiveFeedScreen
             btStatus={btStatus}
-            readings={readings}
+            readings={readings} // This state is updated by your mock effect every 1 second
             latest={latest}
             isConnected={isConnected}
             btBadge={btBadge}
             pulseAnim={pulseAnim}
-            scrollViewRef={scrollViewRef}
             connectedDeviceId={connectedDevice?.id}
+            debugLogs={debugLogs}
           />
         )}
 
@@ -947,7 +1021,7 @@ function MainApp() {
           <AqiReportScreen
             readings={readings}
             deviceId={connectedDevice?.id || '90:15:06:7C:2D:8A'}
-            // deviceId={connectedDevice?.id || '6943fa46f429c94f71aa8df4'} // for checking dummy data
+          // deviceId={connectedDevice?.id || '6943fa46f429c94f71aa8df4'} // for checking dummy data
           />
         )}
         {activeTab === 'profile' && (
@@ -960,6 +1034,20 @@ function MainApp() {
     </SafeAreaView>
   );
 }
+const renderItem = ({ item, index }: { item: Reading; index: number }) => (
+  <View style={[styles.tableRow, index % 2 === 1 && styles.tableRowAlt]}>
+    <Text style={[styles.tableCell, styles.col35]}>
+      {/* Ensure fmtDate and fmtTime are imported from your utils */}
+      {new Date(item.ts).toLocaleDateString()} 
+    </Text>
+    <Text style={[styles.tableCell, styles.col35]}>
+      {new Date(item.ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+    </Text>
+    <Text style={[styles.tableCell, styles.col30]}>
+      {item.value} µg/m³
+    </Text>
+  </View>
+);
 
 // Root wrapper — provides auth context to the whole tree
 export default function App() {
@@ -1014,7 +1102,7 @@ const styles = StyleSheet.create({
   menuItemText: { fontSize: 14, fontWeight: '500', color: '#d4d4d8', marginLeft: 12 },
   logoutItem: { borderTopWidth: 1, borderTopColor: '#3f3f46' },
   logoutText: { fontSize: 14, fontWeight: '500', color: '#f87171', marginLeft: 12 },
-  content: { flex: 1 },
+  content: { flex: 1, backgroundColor: '#18181b' },
   deviceModalContent: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#27272a', borderTopLeftRadius: 20, borderTopRightRadius: 20, padding: 20, maxHeight: '80%' },
   deviceModalTitle: { fontSize: 20, fontWeight: 'bold', color: '#fff', marginBottom: 16, textAlign: 'center' },
   deviceListContainer: { maxHeight: 300, marginBottom: 16 },
@@ -1031,4 +1119,50 @@ const styles = StyleSheet.create({
   refreshBtnText: { color: '#fff', fontSize: 16, fontWeight: '600', textAlign: 'center' },
   closeBtn: { backgroundColor: '#3f3f46', padding: 14, borderRadius: 8 },
   closeBtnText: { color: '#e4e4e7', fontSize: 16, fontWeight: '500', textAlign: 'center' },
+  tableScroll: {
+    height: 400, // Fixed height is safer than maxHeight for live feeds
+  },
+
+  // 2. Table Header Row (The sticky Date/Time/Value labels)
+  tableHeaderRow: {
+    flexDirection: 'row',
+    backgroundColor: '#3f3f46',
+    padding: 12,
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+  },
+
+  // 3. Header Text Styles
+  tableHeaderCell: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#fff',
+  },
+
+  // 4. Column Widths (Must match between Header and Data Rows)
+  col35: {
+    width: '35%',
+  },
+  col30: {
+    width: '30%',
+  },
+
+  // 5. Data Row Styles
+  tableRow: {
+    flexDirection: 'row',
+    padding: 12,
+    borderBottomWidth: 0.5,
+    borderBottomColor: '#27272a',
+  },
+  tableRowAlt: {
+    backgroundColor: '#111113', // Zebra striping for readability
+  },
+
+  // 6. Data Cell Text
+  tableCell: {
+    fontSize: 12,
+    color: '#d4d4d8',
+  },
+
+
 });
