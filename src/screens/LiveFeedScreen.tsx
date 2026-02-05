@@ -326,7 +326,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#27272a',
     overflow: 'hidden',
-    height: 450, // Force the container to a specific height
+    // height: 450, // Force the container to a specific height
   },
   tableHeaderRow: {
     flexDirection: 'row',
