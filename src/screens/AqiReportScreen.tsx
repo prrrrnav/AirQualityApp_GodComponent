@@ -68,6 +68,7 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
       const endISO = targetEnd ? formatEndDate(targetEnd) : undefined;
 
       const response = await apiService.getHistory(deviceId, token, startISO, endISO);
+
       const rawData = Array.isArray(response) ? response : (response?.data || []);
 
       if (rawData.length === 0) {
@@ -87,37 +88,36 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
     } finally {
       setLoading(false);
     }
-  }, [deviceId, token, appliedStart, appliedEnd]);
+  }, [deviceId, token]); // ✅ FIXED: Removed appliedStart, appliedEnd to prevent auto-refresh
 
-  // // ✅ Initial load only - NO auto-refresh interval
-  // useEffect(() => {
-  //   loadBucketedData();
-  // }, [deviceId, token]); // Only reload when device or token changes
+  // ✅ Initial load only - NO auto-refresh interval
+// 1. Initial load on mount or when identity changes
+useEffect(() => {
+  loadBucketedData();
+}, [deviceId, token]); 
 
-  // // ✅ Trigger reload ONLY when user clicks "Apply"
-  // useEffect(() => {
-  //   if (appliedStart !== null || appliedEnd !== null) {
-  //     loadBucketedData();
-  //   }
-  // }, [appliedStart, appliedEnd]); // Separate effect for filter changes
-
-
-
-  useEffect(() => {
+// 2. Explicit Trigger: Reload when user clicks "Apply"
+useEffect(() => {
+  if (appliedStart !== null || appliedEnd !== null) {
+    console.log('[AQI] Filter applied, reloading data...');
     loadBucketedData();
+  }
+}, [appliedStart, appliedEnd]); 
 
-    const interval = setInterval(() => {
-      // ONLY refresh if the user is NOT currently using the date pickers
-      if (!showStartPicker && !showEndPicker) {
-        console.log('[AQI] Background refresh triggered');
-        loadBucketedData();
-      } else {
-        console.log('[AQI] Refresh skipped: User is picking a date');
-      }
-    }, 30000);
+// 3. Passive Maintenance: Auto-refresh every 30s
+useEffect(() => {
+  const interval = setInterval(() => {
+    // Safety Check: Don't refresh if UI pickers are open to avoid layout jumps
+    if (!showStartPicker && !showEndPicker) {
+      console.log('[AQI] Background refresh triggered');
+      loadBucketedData();
+    } else {
+      console.log('[AQI] Refresh skipped: User is picking a date');
+    }
+  }, 30000);
 
-    return () => clearInterval(interval);
-  }, [loadBucketedData, showStartPicker, showEndPicker]); // Add picker states as dependencies
+  return () => clearInterval(interval);
+}, [showStartPicker, showEndPicker, loadBucketedData]);// Separate effect for filter changes
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -126,11 +126,26 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
   };
 
   const applyFilter = () => {
-    // Only update the applied state when button is clicked
+    console.log('[AQI] Apply button clicked', { startSelection, endSelection });
+    
+    // 1. Validation: Prevent logical date errors
+    if (startSelection && endSelection && startSelection > endSelection) {
+      Alert.alert('Invalid Date Range', 'Start date must be before end date.');
+      return;
+    }
+    
+    // 2. Commit the selection to applied state
     setAppliedStart(startSelection);
     setAppliedEnd(endSelection);
+    
+    // 3. Debugging feedback
+    if (startSelection || endSelection) {
+      console.log('[AQI] Applying filters:', { 
+        start: startSelection?.toISOString(), 
+        end: endSelection?.toISOString() 
+      });
+    }
   };
-
   const clearFilter = () => {
     setStartSelection(null);
     setEndSelection(null);
@@ -149,26 +164,30 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
   );
 
   const onStartChange = (event: any, d?: Date) => {
-    // Always close the picker first on Android
     if (Platform.OS === 'android') setShowStartPicker(false);
-
+    
     if (event.type === 'set' && d) {
       setStartSelection(d);
-    } else if (event.type === 'dismissed') {
+      isPickingRef.current = false; // Release the lock
+    } else {
       setShowStartPicker(false);
+      isPickingRef.current = false;
     }
   };
 
+  // HANDLER: Optimized End Date
   const onEndChange = (event: any, d?: Date) => {
     if (Platform.OS === 'android') setShowEndPicker(false);
-
+    
     if (event.type === 'set' && d) {
       setEndSelection(d);
-    } else if (event.type === 'dismissed') {
+      isPickingRef.current = false;
+    } else {
       setShowEndPicker(false);
+      isPickingRef.current = false;
     }
   };
-
+  
   return (
     <View style={styles.pageContainer}>
       <View style={styles.aqiHeaderContainer}>
@@ -181,8 +200,8 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
           <View style={styles.filterRow}>
             <View style={styles.filterGroup}>
               <Text style={styles.filterLabel}>START DATE</Text>
-              <TouchableOpacity
-                style={styles.dateButton}
+              <TouchableOpacity 
+                style={styles.dateButton} 
                 onPress={() => {
                   // Explicitly set focus lock before showing picker
                   setShowStartPicker(true);
@@ -195,19 +214,29 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
 
               {showStartPicker && (
                 <DateTimePicker
+                  // Tie value strictly to startSelection state or fallback to today once
                   value={startSelection || new Date()}
                   mode="date"
                   display={Platform.OS === 'ios' ? 'spinner' : 'default'}
-                  maximumDate={new Date()}
-                  onChange={onStartChange} // <--- USE THE HANDLER
+                  maximumDate={new Date()} 
+                  onChange={(event, d) => {
+                    // Close picker first on Android to avoid UI collision
+                    if (Platform.OS === 'android') setShowStartPicker(false);
+
+                    if (event.type === 'set' && d) {
+                      setStartSelection(d);
+                    } else if (event.type === 'dismissed') {
+                      setShowStartPicker(false);
+                    }
+                  }}
                 />
               )}
             </View>
 
             <View style={styles.filterGroup}>
               <Text style={styles.filterLabel}>END DATE</Text>
-              <TouchableOpacity
-                style={styles.dateButton}
+              <TouchableOpacity 
+                style={styles.dateButton} 
                 onPress={() => {
                   setShowEndPicker(true);
                 }}
@@ -223,7 +252,15 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
                   mode="date"
                   display={Platform.OS === 'ios' ? 'spinner' : 'default'}
                   maximumDate={new Date()}
-                  onChange={onEndChange} // <--- USE THE HANDLER
+                  onChange={(event, d) => {
+                    if (Platform.OS === 'android') setShowEndPicker(false);
+
+                    if (event.type === 'set' && d) {
+                      setEndSelection(d);
+                    } else if (event.type === 'dismissed') {
+                      setShowEndPicker(false);
+                    }
+                  }}
                 />
               )}
             </View>
@@ -273,8 +310,7 @@ export const AqiReportScreen: React.FC<Props> = ({ deviceId }) => {
         />
       </View>
     </View>
-  );
-};
+  );};
 
 const styles = StyleSheet.create({
   pageContainer: { padding: 16 },
