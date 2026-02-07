@@ -24,6 +24,10 @@ const DataRow = memo(({ item, index }: { item: Reading; index: number }) => (
   </View>
 ));
 
+
+//  {/* 2. Debug Log Strip */}
+//  {isConnected && debugLogs.length > 0 && (<View style={styles.debugStrip}><Text style={styles.debugText} numberOfLines={1}>
+//   {/* Last Log: {debugLogs[0]} */}</Text></View>)}
 export const LiveFeedScreen: React.FC<Props> = ({
   btStatus,
   readings,
@@ -55,14 +59,7 @@ export const LiveFeedScreen: React.FC<Props> = ({
           </View>
         </View>
 
-        {/* 2. Debug Log Strip */}
-        {isConnected && debugLogs.length > 0 && (
-          <View style={styles.debugStrip}>
-            <Text style={styles.debugText} numberOfLines={1}>
-              Last Log: {debugLogs[0]}
-            </Text>
-          </View>
-        )}
+       
       </View>
 
       {/* 3. The Table */}
