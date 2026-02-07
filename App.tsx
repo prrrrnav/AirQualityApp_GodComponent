@@ -43,7 +43,7 @@
   function MainApp() {
     const { logout, token } = useAuth();
 
-    const IS_MOCK_MODE = true; // Toggle this to false when connecting to the actual device
+    const IS_MOCK_MODE = false; // Toggle this to false when connecting to the actual device
     const [activeTab, setActiveTab] = useState<string>('live');
     const [menuOpen, setMenuOpen] = useState<boolean>(false);
     const [btStatus, setBtStatus] = useState<'connected' | 'connecting' | 'disconnected'>('disconnected');
